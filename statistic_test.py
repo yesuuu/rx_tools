@@ -4,7 +4,7 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 
 
-def jb_test(series, level=0.05, is_print=True):
+def jb_test(series, level=0.05, is_plot=True, is_print=True):
     """
     output: (is_h0_true, p_value, jb_stat, critical value)
     """
@@ -18,6 +18,9 @@ def jb_test(series, level=0.05, is_print=True):
     p_value = 1 - stat.chi2.cdf(jb, 2)
     cv = stat.chi2.ppf(1 - level, 2)
     is_h0_true = False if p_value < level else True
+    if is_plot:
+        from smart_plot import plot_distribution
+        plot_distribution(series, )
     if is_print:
         print ''
         print '*******  JB TEST  *******'
