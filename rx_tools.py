@@ -1,67 +1,64 @@
+import sys
 import time
 import os
-import warnings
-
+import datetime
+import re
 import numpy as np
 import pandas as pd
 import scipy.stats as stat
 import statsmodels.api as sm
+import matplotlib
 import matplotlib.pyplot as plt
-from sklearn import linear_model
+import seaborn
+from sklearn.linear_model import LassoLars
+from sklearn.decomposition import PCA
+
+matplotlib.use("Qt4Agg")
+pd.set_option('expand_frame_repr', False)
+pd.set_option('display.max_columns', 15)
 
 
 class RxToolsBasic(object):
-    class Decorators(object):
+
+    class Wrappers(object):
 
         @staticmethod
-        def deco_save_fig(default_save_file):
+        def save_fig_wrapper(func):
             """
             A decorator to save pictures
             in func, you should plot a single figure, neither show nor save_fig.
 
-            Parameters
-            -------------------------------------
-            default_save_file:
-                    only file name of picture, not including save path
-
             Notes
             -------------------------------------
-            in the function, 'save_path' and 'save_file' should not be kwargs
+            in the function, 'fig_save_file' should not be kwargs
 
-            'save_path' means the file path you want to save pictures to
-            'save_file' means the file name
+            'fig_save_file' means picture path
             """
 
-            def save_fig(func):
-                def new_func(*args, **kwargs):
-                    if 'save_path' in kwargs:
-                        save_path = kwargs['save_path']
-                        del kwargs['save_path']
-                    else:
-                        save_path = None
+            def new_func(*args, **kwargs):
 
-                    if 'save_file' in kwargs:
-                        save_file = kwargs['save_file']
-                        del kwargs['save_file']
-                    else:
-                        save_file = default_save_file
-                    func(*args, **kwargs)
-                    if len(plt.get_fignums()) != 1:
-                        raise Exception('plt model has more than one picture')
-                    if not save_path:
-                        plt.show()
-                    else:
-                        if not os.path.isdir(save_path):
-                            os.makedirs(save_path)
-                        plt.savefig(os.path.join(save_path, save_file))
-                        plt.close()
+                if 'fig_save_file' in kwargs:
+                    save_file = kwargs['fig_save_file']
+                    del kwargs['fig_save_file']
+                else:
+                    save_file = None
+                func(*args, **kwargs)
+                if len(plt.get_fignums()) != 1:
+                    raise Exception('plt model has more than one picture')
+                if not save_file:
+                    plt.show()
+                else:
+                    save_path = os.path.split(save_file)[0]
+                    if not os.path.isdir(save_path):
+                        os.makedirs(save_path)
+                    plt.savefig(save_file)
+                    plt.close()
 
-                return new_func
-
-            return save_fig
+            return new_func
 
         @staticmethod
-        def deco_calc_time(func):
+        def calc_time_wrapper(func):
+
             def new_func(*args, **kwargs):
                 time1 = time.clock()
                 result = func(*args, **kwargs)
@@ -72,7 +69,7 @@ class RxToolsBasic(object):
 
             return new_func
 
-    class Others(object):
+    class NpTools(object):
 
         @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
@@ -96,6 +93,77 @@ class RxToolsBasic(object):
             for i in range(group_num):
                 new_arr.append(arr[indexs[i]:indexs[i + 1]])
             return new_arr
+
+        @staticmethod
+        def get_quantile(x, y=None, quantile=0.5):
+            y = x if y is None else y
+            assert len(x) == len(y)
+            x_arg = np.argsort(x)
+            idx = int(round(len(x) * quantile))
+            idx = idx - 1 if idx > 0 else 0
+            return y[x_arg[idx]]
+
+    class DevelopTools(object):
+
+        @staticmethod
+        def interrupt(message):
+            stop_message = '\nDo you want to stop?(y or n):'
+            response = raw_input(message + stop_message)
+            if response in ('YES', 'Y', 'Yes', 'yes', 'y'):
+                raise Exception('Stop!')
+            else:
+                return
+
+        class Log(object):
+
+            def __init__(self, file_format='log/%T', is_to_console=True):
+                folder = os.path.split(file_format)[0]
+                if not folder == '':
+                    if not os.path.isdir(folder):
+                        os.makedirs(folder)
+                if '%T' in file_format:
+                    time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+                    file_format.replace('%T', time_str)
+                elif '%D' in file_format:
+                    time_str = datetime.datetime.now().strftime('%Y-%m-%d')
+                    file_format.replace('%D', time_str)
+                self.file_name = file_format
+                self.is_to_console = is_to_console
+
+            def start(self):
+                self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
+                self.log_obj.start()
+
+            def close(self):
+                self.log_obj.close()
+
+            class PrintLogObject(object):
+                def __init__(self, files, is_to_console=True):
+
+                    self.is_to_console = is_to_console
+                    self.console = sys.__stdout__
+
+                    if isinstance(files, str):
+                        files = [files]
+
+                    self.file_objects = [open(file_, 'w') for file_ in files]
+
+                def write(self, message):
+                    for file_object in self.file_objects:
+                        file_object.write(message)
+                    if self.is_to_console:
+                        self.console.write(message)
+
+                def flush(self):
+                    pass
+
+                def start(self):
+                    sys.stdout = self
+
+                def close(self):
+                    for file_object in self.file_objects:
+                        file_object.close()
+                    sys.stdout = self.console
 
 
 class RxTools(RxToolsBasic):
@@ -210,6 +278,69 @@ class RxTools(RxToolsBasic):
                 print 'critical value: %f' % (cv,)
             return is_h0_true, p_value, t_value, cv
 
+    class StatisticTools(object):
+
+        @staticmethod
+        def find_pca_order(x, thresholds=None, is_plot=True):
+            """
+            input:
+                thresholds: must has attr '__len__'
+                    default [0.5, 0.8, 0.9, 0.95, 0.99, 0.999]
+            """
+            if thresholds is None:
+                thresholds = [0.5, 0.8, 0.9, 0.95, 0.99, 0.999, ]
+            assert hasattr(thresholds, '__len__')
+
+            pca = PCA()
+            pca.fit(x)
+            ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
+
+            print '-' * 50
+            i, j = 0, 0
+            nums = []
+            while i < len(thresholds) and j < len(ratio_cumsum):
+
+                if ratio_cumsum[j] < thresholds[i]:
+                    j += 1
+                else:
+                    print 'thres:', thresholds[i], '\t\tnums:', j
+                    i += 1
+                    nums.append(j)
+
+            print '-' * 50
+
+            if is_plot:
+                plt.plot(pca.explained_variance_ratio_, label='ratio')
+                plt.plot(ratio_cumsum, label='ratio_cumsum')
+                plt.legend(loc='best')
+                plt.show()
+
+            return pca
+
+        @staticmethod
+        def find_lasso_para(x, y, paras=None, start_exp=-10, end_exp=-1, ):
+            """
+            Output:
+                test_paras, variable_num, coefs
+            """
+            x = np.array(x)
+            y = np.array(y)
+            x = (x - np.mean(x, axis=0)) / np.std(x, axis=0)
+            if paras is None:
+                assert isinstance(start_exp, int)
+                assert isinstance(end_exp, int)
+                assert end_exp >= start_exp
+                paras = [10 ** i for i in range(start_exp, end_exp)]
+            variable_num = []
+            params = []
+            for para in paras:
+                tmp_model = LassoLars(alpha=para)
+                tmp_model.fit(sm.add_constant(x), y)
+                tmp_coef = tmp_model.coef_
+                variable_num.append(np.sum(tmp_coef != 0))
+                params.append(tmp_coef)
+            return paras, variable_num, params
+
     class OneDAnalysisFunctions(object):
 
         DEFAULT_MIN_LENGTH = 10
@@ -240,6 +371,19 @@ class RxTools(RxToolsBasic):
             return 1 - np.sum((y - y_hat) ** 2) / np.sum((y - y_mean) ** 2)
 
         @staticmethod
+        def calc_top_mean(y, y_hat, top_percentage=0.05, top_type='top'):
+            y, y_hat = RxTools.OneDAnalysisFunctions.one_d_check(y, y_hat)
+            top_num = int(round(len(y) * top_percentage))
+            assert top_num > 0, 'Too short data!'
+            if top_type in ('top', 't', 'TOP', 'T', 'Top'):
+                args = np.argsort(y_hat)[-top_num:]
+            elif top_type in ('bottom', 'b', 'BOTTOM', 'B', 'Bottom'):
+                args = np.argsort(y_hat)[:top_num]
+            else:
+                raise Exception('Unknown top_type!')
+            return np.mean(y[args])
+
+        @staticmethod
         def calc_stats(x):
             """
 
@@ -265,7 +409,7 @@ class RxTools(RxToolsBasic):
             return sr, ret, vol, dd, str_pre
 
         @staticmethod
-        @RxToolsBasic.Decorators.deco_save_fig('qq plot')
+        @RxToolsBasic.Wrappers.save_fig_wrapper
         def plot_quantile(x, y, num=20, is_reg=True):
             x, y = RxTools.OneDAnalysisFunctions.one_d_check(x, y, num)
             x_arg = np.argsort(x)
@@ -308,6 +452,35 @@ class RxTools(RxToolsBasic):
                 xlist = norm_mean + norm_std * np.array(xlist_1)
                 plt.plot(xlist, ylist)
             plt.show()
+
+        @staticmethod
+        def calc_top_batch_mean(y, y_hat, top_percentage=0.025, top_gap=0.0025, top_type='both'):
+            y = np.array(y).ravel()
+            y_hat = np.array(y_hat).ravel()
+            batch_num = int(top_percentage / top_gap)
+            batch_size = int(round(len(y) * top_gap))
+            assert batch_size > 0, 'Too small batch! %d' % (batch_size,)
+            if top_type in ('top', 't', 'TOP', 'T', 'Top'):
+                mean_list = []
+                for b in range(batch_num):
+                    if b == 0:
+                        mean_list.append(np.mean(y[np.argsort(y_hat)[-batch_size:]]))
+                    else:
+                        mean_list.append(np.mean(y[np.argsort(y_hat)[-batch_size * (b + 1):-batch_size * b]]))
+            elif top_type in ('bottom', 'b', 'BOTTOM', 'B', 'Bottom'):
+                mean_list = [np.mean(y[np.argsort(y_hat)[batch_size * b:batch_size * (b + 1)]]) for b in range(batch_num)]
+            elif top_type == 'both':
+                mean_list = []
+                for b in range(batch_num):
+                    if b == 0:
+                        mean_list.append(np.mean(y[np.argsort(y_hat)[-batch_size:]] -
+                                                 y[np.argsort(y_hat)[batch_size * b:batch_size * (b + 1)]]) / 2.)
+                    else:
+                        mean_list.append(np.mean(y[np.argsort(y_hat)[-batch_size * (b + 1):-batch_size * b]] -
+                                                 y[np.argsort(y_hat)[batch_size * b:batch_size * (b + 1)]]) / 2.)
+            else:
+                raise Exception('Unknown top_type!')
+            return mean_list
 
     class TwoDAnalysisFunctions(object):
 
@@ -373,232 +546,171 @@ class RxTools(RxToolsBasic):
                     continue
             return
 
-    class RegressionTools(object):
-
-        @staticmethod
-        def find_lasso_para(x, y, paras=None, start_exp=-10, end_exp=-10, ):
-            """
-            Output:
-                test_paras, variable_num, coefs
-            """
-            x = np.array(x)
-            y = np.array(y)
-            x = (x - np.mean(x, axis=0)) / np.std(x, axis=0)
-            if paras is None:
-                assert isinstance(start_exp, int)
-                assert isinstance(end_exp, int)
-                assert end_exp >= start_exp
-                paras = [10 ** i for i in range(start_exp, end_exp)]
-            variable_num = []
-            params = []
-            for para in paras:
-                tmp_model = linear_model.LassoLars(alpha=para)
-                tmp_model.fit(sm.add_constant(x), y)
-                tmp_coef = tmp_model.coef_
-                variable_num.append(np.sum(tmp_coef != 0))
-                params.append(tmp_coef)
-            return paras, variable_num, params
-
     class VariableSelection(object):
 
-        @staticmethod
-        def _check_data(x, y):
-            x = np.array(x)
-            assert len(x.shape) == 2
-            y = np.array(y).ravel()
-            assert x.shape[0] == len(y)
-            if len(y) < 100:
-                print 'Warning: data length %d too small ' % (len(y),)
-            return x, y
+        class AbstractSelection(object):
 
-        @staticmethod
-        def backward_selection_r2(x, y, p_value=0.05, threshold=0.001, is_print=True):
-            x, y = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                x_reg = sm.add_constant(x[:, i])
-                if len(x_reg.shape) == 1:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, all const' % (i,)
-                    break
-                model = sm.OLS(y, x_reg).fit()
-                if model.pvalues[1] > p_value:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, pvalue %.4f' % (i, model.pvalues[1])
-            in_model_num = int(np.sum(select))
-            while in_model_num > 1:
+            @staticmethod
+            def _check_data(x, y):
+                if isinstance(x, pd.DataFrame):
+                    pass
+                elif isinstance(x, np.ndarray):
+                    x = pd.DataFrame(x)
+                else:
+                    raise TypeError('Unknown type of x')
+                assert len(x.shape) == 2
+                y = np.array(y).ravel()
+                assert x.shape[0] == len(y)
+                if len(y) < 100:
+                    print 'Warning: data length %d too small ' % (len(y),)
+                return x, y
+
+            def select(self, x, y, x_columns=None, is_print=False):
+                x, y = self._check_data(x, y)
+                if x_columns is None:
+                    x_columns = list(x.columns)
+                else:
+                    x_columns = list(x_columns)
+                    for x_column in x_columns:
+                        assert x_column in x.columns
+                return self._select(x, y, x_columns, is_print)
+
+            def _select(self, x, y, x_columns, is_print=False):
+                raise NotImplementedError
+
+        class RemoveAllConst(AbstractSelection):
+            def __init__(self):
+                pass
+
+            def _select(self, x, y, x_columns, is_print=False):
                 if is_print:
-                    print 'In model num: %d' % (in_model_num,)
-                select_index = [i for i in range(x.shape[1]) if select[i] == True]
-                bench = sm.OLS(y, sm.add_constant(x[:, select_index])).fit()
-                group_size = in_model_num / 30 + 1 if in_model_num < 300 else 10
-                if is_print:
-                    print 'group size: %d' % (group_size,)
-                group_num = in_model_num / group_size + 1
-                select_index_group = RxToolsBasic.Others.divide_into_group(select_index, group_num=group_num)
-                assert len(select_index_group) == group_num
-                adj_r2 = np.zeros(group_num)
-                for i in range(group_num):
-                    if is_print:
-                        print 'calc adj_r2:', i
-                    tmp_select = [j for j in select_index if j not in select_index_group[i]]
-                    tmp_res = sm.OLS(y, sm.add_constant(x[:, tmp_select])).fit()
-                    adj_r2[i] = tmp_res.rsquared_adj
-                rsquared_loss = bench.rsquared_adj - adj_r2
-                max_del_num = (group_num / 20 + 1) if (group_num <= 100) else (group_num / 10)
-                loss_min_arg = rsquared_loss.argsort()[:max_del_num]
-                for i in range(max_del_num):
-                    if rsquared_loss[loss_min_arg[i]] < threshold:
-                        select[np.array(select_index_group[loss_min_arg[i]])] = False
+                    print '[Remove All Const] selecting ...'
+                for x_column in x_columns:
+                    x_single = x[x_column].values
+                    if len(sm.add_constant(x_single).shape) == 1:
+                        x_columns.remove(x_column)
                         if is_print:
-                            print '\t', select_index_group[loss_min_arg[i]], ' dropped, rsquared loss %.2fE-3' % (
-                                rsquared_loss[loss_min_arg[i]] * 1e3,)
+                            print '[Remove All Const] %d remain, remove %s, all constant' \
+                                  % (len(x_columns), x_column, )
+                return x_columns
+
+        class BackwardSingleP(AbstractSelection):
+            def __init__(self, p_threshold=0.05):
+                self.p_threshold = p_threshold
+
+            def _select(self, x, y, x_columns, is_print=False):
+                if is_print:
+                    print '[Select Single P] selecting ...'
+                for x_column in x_columns:
+                    x_single = x[x_column].values
+                    x_reg = sm.add_constant(x_single)
+                    model = sm.OLS(y, x_reg).fit()
+                    p_value = model.pvalues[-1]
+                    if p_value > self.p_threshold:
+                        x_columns.remove(x_column)
+                        if is_print:
+                            print '[Select Single P] %d remain, remove %s, single p value %.4f' \
+                                  % (len(x_columns), x_column, p_value)
+                return x_columns
+
+        class BackwardMarginR2(AbstractSelection):
+            def __init__(self, r2_diff_threshold=-np.infty, n_min=1, ):
+                self.r2_diff_threshold = r2_diff_threshold
+                self.n_min = n_min
+
+            def _select(self, x, y, x_columns, is_print=False):
+                if is_print:
+                    print '[Select Margin R2] selecting ...'
+
+                if len(x_columns) <= self.n_min:
+                    return x_columns
+
+                while len(x_columns) > self.n_min:
+
+                    bench_r2 = sm.OLS(y, x[x_columns]).fit().rsquared_adj
+                    best_r2_diff, best_x_column = -np.inf, None
+
+                    for x_column in x_columns:
+                        # print '...', x_column
+                        x_columns_tmp = x_columns[:]
+                        x_columns_tmp.remove(x_column)
+                        tmp_r2_diff = sm.OLS(y, x[x_columns_tmp]).fit().rsquared_adj - bench_r2
+                        if tmp_r2_diff > best_r2_diff:
+                            best_r2_diff, best_x_column = tmp_r2_diff, x_column
+
+                    if best_r2_diff > self.r2_diff_threshold:
+                        x_columns.remove(best_x_column)
+                        if is_print:
+                            print '[Select Margin R2] %d remain, remove %s, %.6f r2 diff' \
+                                  % (len(x_columns), best_r2_diff, best_x_column)
                     else:
-                        break
-                in_model_num_new = int(np.sum(select))
-                if in_model_num == in_model_num_new:
-                    break
-                else:
-                    in_model_num = in_model_num_new
-            return select
-
-        @staticmethod
-        def backward_selection_t(x, y, p_value=0.05, t_threshold=2.0, is_print=True):
-            x, y = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                x_reg = sm.add_constant(x[:, i])
-                if len(x_reg.shape) == 1:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, all const' % (i,)
-                    break
-                model = sm.OLS(y, x_reg).fit()
-                if model.pvalues[1] > p_value:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, pvalue %.4f' % (i, model.pvalues[1])
-            in_model_num = int(np.sum(select))
-            while in_model_num > 1:
-                if is_print:
-                    print 'In model num: %d' % (in_model_num,)
-                select_index = [i for i in range(x.shape[1]) if select[i] == True]
-                bench = sm.OLS(y, sm.add_constant(x[:, select])).fit()
-                t_values = bench.tvalues[1:]
-                for i in range(len(t_values)):
-                    if np.abs(t_values[i]) < t_threshold:
-                        select[select_index[i]] = False
                         if is_print:
-                            print '%d dropped, t value: %0.4f' % (select_index[i], t_values[i])
+                            print '[Select Margin R2] %d remain, stops, %.6f r2 diff' \
+                                  % (len(x_columns), best_r2_diff)
                         break
-                in_model_num_new = int(np.sum(select))
-                if in_model_num == in_model_num_new:
-                    break
-                else:
-                    in_model_num = in_model_num_new
-            return select
+                return x_columns
 
-        @staticmethod
-        def backward_selection_t2(x, y, t_threshold=2.0, is_print=True):
-            x, y = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                x_reg = sm.add_constant(x[:, i])
-                if len(x_reg.shape) == 1:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, all const' % (i,)
-                    continue
-            in_model_num = int(np.sum(select))
-            while in_model_num > 1:
-                if is_print:
-                    print 'In model num: %d' % (in_model_num,)
-                select_index = [i for i in range(x.shape[1]) if select[i] == True]
-                bench = sm.OLS(y, sm.add_constant(x[:, select])).fit()
-                t_values = bench.tvalues[1:]
-                t_values_abs = np.abs(t_values)
-                t_values_min_arg = np.argmin(t_values_abs)
-                if t_values_abs[t_values_min_arg] < t_threshold:
-                    select[select_index[t_values_min_arg]] = False
-                    in_model_num -= 1
-                    if is_print:
-                        print '%d dropped, t value: %0.4f' % (select_index[t_values_min_arg],
-                                                              t_values[t_values_min_arg])
-                else:
-                    break
-            return select
+        class BackwardMarginT(AbstractSelection):
+            def __init__(self, t_threshold=np.infty, n_min=1, ):
+                self.t_threshold = t_threshold
+                self.n_min = n_min
 
-        @staticmethod
-        def backward_selection_f(x, y, p_value=1.0, group_size_list=(5, 1),
-                                 f_p_value_list=(0.5, 0.05), is_print=True):
-            assert len(group_size_list) == len(f_p_value_list)
-            (x, y) = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                x_reg = sm.add_constant(x[:, i])
-                if len(x_reg.shape) == 1:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, all const' % (i,)
-                    continue
-                model = sm.OLS(y, x_reg).fit()
-                if model.pvalues[1] > p_value:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, pvalue %.4f' % (i, model.pvalues[1])
-            for group_size, f_p_value in zip(group_size_list, f_p_value_list):
+            def _select(self, x, y, x_columns, is_print=False):
                 if is_print:
-                    print 'group size:', group_size
-                while True:
-                    if is_print:
-                        print 'in_model_num', int(np.sum(select))
-                    select_index = [nn for nn in range(x.shape[1]) if select[nn] == True]
-                    bench = sm.OLS(y, x[:, select_index]).fit()
-                    p_values = bench.pvalues
-                    p_values_argsort = np.flipud(np.argsort(p_values))
-                    group = p_values_argsort[:group_size]
-                    print p_values[group]
-                    restricted_index = [j for j in select_index if j not in np.array(select_index)[group]]
-                    restricted_model = sm.OLS(y, x[:, restricted_index]).fit()
-                    tmpres = bench.compare_f_test(restricted_model)
-                    print tmpres
-                    f_value = tmpres[1]
-                    if f_value > f_p_value:
-                        select[np.array(np.array([select_index[k] for k in group]))] = False
+                    print '[Select Margin T] selecting ... %d remain' % (len(x_columns), )
+                    print '[Select Margin T] T threshold: %.4f, min num of var: %d' % (self.t_threshold, self.n_min)
+
+                while len(x_columns) > self.n_min:
+
+                    t_values = sm.OLS(y, x[x_columns]).fit().tvalues.abs().sort_values()
+                    x_column, min_t_value = t_values.index[0], t_values[0]
+
+                    if min_t_value < self.t_threshold:
+                        x_columns.remove(x_column)
                         if is_print:
-                            print np.array(select_index)[group], ' dropped, p_value %.4f' % (f_value,)
+                            print '[Select Margin T] %d remain, remove %s, t value: %.4f' \
+                                  % (len(x_columns), x_column, min_t_value)
                     else:
+                        if is_print:
+                            print '[Select Margin T] %d remain, stops, t value: %.4f' \
+                                  % (len(x_columns), min_t_value)
                         break
-            return select
+                return x_columns
 
-        @staticmethod
-        def p_value_selection(x, y, p_value=0.03, is_print=True):
-            x, y = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                x_reg = sm.add_constant(x[:, i])
-                if len(x_reg.shape) == 1:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, all const' % (i,)
-                    break
-                model = sm.OLS(y, x_reg).fit()
-                if model.pvalues[1] > p_value:
-                    select[i] = False
-                    if is_print:
-                        print '%d dropped, pvalue %.4f' % (i, model.pvalues[1])
-            return select
+        class BackwardMarginF(AbstractSelection):
 
-        @staticmethod
-        def corr_selection(x, y, threshold):
-            x, y = RxTools.VariableSelection._check_data(x, y)
-            select = np.full(x.shape[1], True, bool)
-            for i in range(x.shape[1]):
-                if np.abs(np.corrcoef(x[:, i], y)[0, 1]) < threshold:
-                    select[i] = False
-            return select
+            def __init__(self, group_size=5, f_p_value=0.0, n_min=1, ):
+                self.group_size = group_size
+                self.f_p_value = f_p_value
+                self.n_min = n_min
+
+            def _select(self, x, y, x_columns, is_print=False):
+                if is_print:
+                    print '[Select Margin F] selecting ... %d remain' % (len(x_columns),)
+                    print '[Select Margin F] group size: %d' % (self.group_size,)
+                    print '[Select Margin F] F P-value: %.4f, min num of var: %d' % (self.f_p_value, self.n_min)
+                while len(x_columns) > self.n_min:
+                    bench = sm.OLS(y, x[x_columns]).fit()
+                    p_values_sorted = bench.pvalues.sort_values()
+                    group = p_values_sorted[-self.group_size:]
+                    print '[Select Margin F]', list(group.index)
+                    print '[Select Margin F]', list(group.values)
+                    restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
+                    f_test_res = bench.compare_f_test(restricted_model)
+                    print f_test_res
+                    f_value = f_test_res[1]
+                    if f_value > self.f_p_value:
+                        for x_column in group.index:
+                            x_columns.remove(x_column)
+                            if is_print:
+                                print '[Select Margin F] %d remain, remove %s, f value: %.4f' \
+                                  % (len(x_columns), x_column, f_value)
+                    else:
+                        if is_print:
+                            print '[Select Margin F] %d remain, stops, f value: %.4f' \
+                                  % (len(x_columns), f_value)
+                        break
+                return x_columns
 
     class Protocols(object):
         """
@@ -610,7 +722,7 @@ class RxTools(RxToolsBasic):
         You should rewrite these:
         1. _item_help
         2. default_save_folder
-        3. _check_data
+        3. _checkData
 
         ATTENTION: 'name' and 'save_folder' should not in your keys
 
@@ -636,6 +748,7 @@ class RxTools(RxToolsBasic):
 
             def __init__(self, **kwargs):
                 self.name = None
+                self.save_folder = None
                 if kwargs.get('name'):
                     self.load(kwargs.get('name'), kwargs.get('save_folder'))
                 else:
@@ -644,7 +757,7 @@ class RxTools(RxToolsBasic):
                         if k in self._items_help:
                             self._items_dict[k] = value
                         else:
-                            print 'WARNING: %s is no use!' % (k, )
+                            print 'WARNING: %s is no use!' % (k,)
 
             @classmethod
             def print_help(cls):
@@ -666,11 +779,13 @@ class RxTools(RxToolsBasic):
                 self._items_dict[item] = value
 
             def get_item(self, item):
+
                 try:
                     return self._items_dict[item]
                 except KeyError:
-                    warnings.warn('No item %s, return None' % (item,))
-                    return None
+                    name = 'Current object' if self.name is None else self.name
+                    print 'Warning: ' + name + ' has no item %s, return None' % (item,)
+                    return
 
             def _check_data(self):
                 pass
@@ -679,6 +794,7 @@ class RxTools(RxToolsBasic):
                 self._check_data()
                 self.name = name
                 save_folder = self.default_save_folder if save_folder is None else save_folder
+                self.save_folder = save_folder
                 if not os.path.isdir(save_folder):
                     os.makedirs(save_folder)
                 path = os.path.join(save_folder, name)
@@ -688,7 +804,12 @@ class RxTools(RxToolsBasic):
                 save_folder = self.default_save_folder if save_folder is None else save_folder
                 path = os.path.join(save_folder, name)
                 self.name = name
+                self.save_folder = save_folder
                 self._items_dict = pd.read_pickle(path)
+
+            def update(self):
+                assert self.name is not None and self.save_folder is not None
+                self.save(self.name, self.save_folder)
 
         class NeuralNetworkProtocol(AbstractProtocol):
 
@@ -699,9 +820,46 @@ class RxTools(RxToolsBasic):
                            'y_test': 'rt',
                            'x_train': 'rt',
                            'y_train': 'rt',
+                           'x_valid': 'validation x',
+                           'y_valid': 'validation y',
                            'r2_is': 'in sample r2',
                            'r2_os': 'out sample r2',
-                           'y_hat_is': 'rt',
-                           'y_hat_os': 'rt',
+                           'r2_valid': 'validation sample r2',
+                           'y_hat_is': 'in sample y^',
+                           'y_hat_os': 'out sample y^',
+                           'y_hat_valid': 'validation y^',
+                           'layer_code': 'layer_code',
                            }
-            default_save_folder = '/home/fanruoxin/fit_mlp/results2'
+            default_save_folder = ''
+
+    class LogAnalysis(object):
+
+        @staticmethod
+        def log_analysis_single_re(log_str, expression, keys, functions=None):
+            if isinstance(keys, str):
+                keys = [keys]
+            if functions is not None:
+                assert len(keys) == len(functions)
+            mappings = re.findall(expression, log_str)
+            if not mappings:
+                print 'Warning: no matches in log_str'
+                return []
+
+            elif len(mappings) >= 1:
+                keys_dict_list = []
+                for mapping in mappings:
+                    if functions:
+                        if len(keys) == 1:
+                            keys_dict_list.append({keys[0]: functions[0](mapping)})
+                        else:
+                            assert len(keys) == len(mapping) == len(functions)
+                            keys_dict_list.append({keys[i]: functions[i](mapping[i]) for i in range(len(keys))})
+                    else:
+                        if len(keys) == 1:
+                            keys_dict_list.append({keys[0]: mapping})
+                        else:
+                            assert len(keys) == len(mapping)
+                            keys_dict_list.append({keys[i]: mapping[i] for i in range(len(keys))})
+
+                return keys_dict_list
+
