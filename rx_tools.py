@@ -631,7 +631,6 @@ class RxTools(RxToolsBasic):
                     best_r2_diff, best_x_column = -np.inf, None
 
                     for x_column in x_columns:
-                        # print '...', x_column
                         x_columns_tmp = x_columns[:]
                         x_columns_tmp.remove(x_column)
                         tmp_r2_diff = sm.OLS(y, x[x_columns_tmp]).fit().rsquared_adj - bench_r2
@@ -695,21 +694,28 @@ class RxTools(RxToolsBasic):
                     group = p_values_sorted[-self.group_size:]
                     print '[Select Margin F]', list(group.index)
                     print '[Select Margin F]', list(group.values)
-                    restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
-                    f_test_res = bench.compare_f_test(restricted_model)
-                    print f_test_res
-                    f_value = f_test_res[1]
-                    if f_value > self.f_p_value:
-                        for x_column in group.index:
+                    if self.f_p_value == 0.0:
+                        for x_column in list(reversed(list(group.index))):
                             x_columns.remove(x_column)
                             if is_print:
-                                print '[Select Margin F] %d remain, remove %s, f value: %.4f' \
+                                print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
                                   % (len(x_columns), x_column, f_value)
                     else:
-                        if is_print:
-                            print '[Select Margin F] %d remain, stops, f value: %.4f' \
-                                  % (len(x_columns), f_value)
-                        break
+                        restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
+                        f_test_res = bench.compare_f_test(restricted_model)
+                        print f_test_res
+                        f_value = f_test_res[1]
+                        if f_value > self.f_p_value:
+                            for x_column in list(reversed(list(group.index))):
+                                x_columns.remove(x_column)
+                                if is_print:
+                                    print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
+                                      % (len(x_columns), x_column, f_value)
+                        else:
+                            if is_print:
+                                print '[Select Margin F] %d remain, stops, f value: %.4f' \
+                                      % (len(x_columns), f_value)
+                            break
                 return x_columns
 
     class Protocols(object):
