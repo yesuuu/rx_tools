@@ -72,6 +72,23 @@ class RxToolsBasic(object):
     class NpTools(object):
 
         @staticmethod
+        def pdist(matrix, axis=0, dist_type='l2'):
+            """
+            input: dist_type: l2
+            """
+            dist_type_dict = {'l2': lambda x, y: np.sqrt(np.sum((x - y) ** 2))}
+            dist_func = dist_type_dict[dist_type]
+            matrix = matrix.T if axis == 1 else matrix
+            n = matrix.shape[1]
+            dist_matrix = np.zeros((n, n))
+            for i in range(n):
+                for j in range(i):
+                    tmp_dist = dist_func(matrix[:, i], matrix[:, j])
+                    dist_matrix[i, j] = tmp_dist
+                    dist_matrix[j, i] = tmp_dist
+            return dist_matrix
+
+        @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
             assert group_size is not None or group_num is not None
             if group_num is not None:
@@ -114,63 +131,6 @@ class RxToolsBasic(object):
             else:
                 return
 
-        class Log(object):
-
-            def __init__(self, file_format='log/%T', is_to_console=True):
-                folder = os.path.split(file_format)[0]
-                if not folder == '':
-                    if not os.path.isdir(folder):
-                        os.makedirs(folder)
-                if '%T' in file_format:
-                    time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-                    file_format = file_format.replace('%T', time_str)
-                elif '%D' in file_format:
-                    time_str = datetime.datetime.now().strftime('%Y-%m-%d')
-                    file_format = file_format.replace('%D', time_str)
-                self.file_name = file_format
-                self.is_to_console = is_to_console
-
-            def start(self, is_print=False):
-                self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
-                self.log_obj.start()
-                if is_print:
-                    print '[log] log starts, to file %s' % (self.file_name, )
-
-            def close(self):
-                self.log_obj.close()
-
-            def save(self, save_file, is_print=False):
-                os.system('cp '+self.file_name+' '+save_file)
-                if is_print:
-                    print '[log] log copy to %s' % (save_file, )
-
-            class PrintLogObject(object):
-                def __init__(self, files, is_to_console=True):
-
-                    self.is_to_console = is_to_console
-                    self.console = sys.__stdout__
-
-                    if isinstance(files, str):
-                        files = [files]
-
-                    self.file_objects = [open(file_, 'w') for file_ in files]
-
-                def write(self, message):
-                    for file_object in self.file_objects:
-                        file_object.write(message)
-                    if self.is_to_console:
-                        self.console.write(message)
-
-                def flush(self):
-                    pass
-
-                def start(self):
-                    sys.stdout = self
-
-                def close(self):
-                    for file_object in self.file_objects:
-                        file_object.close()
-                    sys.stdout = self.console
 
 
 class RxTools(RxToolsBasic):
@@ -842,6 +802,63 @@ class RxTools(RxToolsBasic):
                            }
             default_save_folder = ''
 
+    class Log(object):
+        def __init__(self, file_format='log/%T', is_to_console=True):
+            folder = os.path.split(file_format)[0]
+            if not folder == '':
+                if not os.path.isdir(folder):
+                    os.makedirs(folder)
+            if '%T' in file_format:
+                time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+                file_format = file_format.replace('%T', time_str)
+            elif '%D' in file_format:
+                time_str = datetime.datetime.now().strftime('%Y-%m-%d')
+                file_format = file_format.replace('%D', time_str)
+            self.file_name = file_format
+            self.is_to_console = is_to_console
+
+        def start(self, is_print=False):
+            self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
+            self.log_obj.start()
+            if is_print:
+                print '[log] log starts, to file %s' % (self.file_name, )
+
+        def close(self):
+            self.log_obj.close()
+
+        def save(self, save_file, is_print=False):
+            os.system('cp '+self.file_name+' '+save_file)
+            if is_print:
+                print '[log] log copy to %s' % (save_file, )
+
+        class PrintLogObject(object):
+            def __init__(self, files, is_to_console=True):
+
+                self.is_to_console = is_to_console
+                self.console = sys.__stdout__
+
+                if isinstance(files, str):
+                    files = [files]
+
+                self.file_objects = [open(file_, 'w') for file_ in files]
+
+            def write(self, message):
+                for file_object in self.file_objects:
+                    file_object.write(message)
+                if self.is_to_console:
+                    self.console.write(message)
+
+            def flush(self):
+                pass
+
+            def start(self):
+                sys.stdout = self
+
+            def close(self):
+                for file_object in self.file_objects:
+                    file_object.close()
+                sys.stdout = self.console
+
     class LogAnalysis(object):
 
         @staticmethod
@@ -991,13 +1008,13 @@ class RxTools(RxToolsBasic):
             assert self.data is not None
             self.train_range = self._get_range(train_range)
 
-        def set_valid_range(self, valid_range):
+        def set_valid_range(self, valid_range=None):
             if valid_range is None:
                 valid_range = self.valid_range
             assert self.data is not None
             self.valid_range = self._get_range(valid_range)
 
-        def set_test_range(self, test_range):
+        def set_test_range(self, test_range=None):
             if test_range is None:
                 test_range = self.test_range
             assert self.data is not None
