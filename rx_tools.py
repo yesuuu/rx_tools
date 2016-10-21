@@ -565,7 +565,7 @@ class RxTools(RxToolsBasic):
                     print 'Warning: data length %d too small ' % (len(y),)
                 return x, y
 
-            def select(self, x, y, x_columns=None, is_print=False):
+            def select(self, x, y, x_columns=None):
                 x, y = self._check_data(x, y)
                 if x_columns is None:
                     x_columns = list(x.columns)
@@ -573,33 +573,35 @@ class RxTools(RxToolsBasic):
                     x_columns = list(x_columns)
                     for x_column in x_columns:
                         assert x_column in x.columns
-                return self._select(x, y, x_columns, is_print)
+                return self._select(x, y, x_columns)
 
-            def _select(self, x, y, x_columns, is_print=False):
+            def _select(self, x, y, x_columns):
                 raise NotImplementedError
 
         class RemoveAllConst(AbstractSelection):
-            def __init__(self):
-                pass
 
-            def _select(self, x, y, x_columns, is_print=False):
-                if is_print:
+            def __init__(self, is_print=False):
+                self.is_print = is_print
+
+            def _select(self, x, y, x_columns):
+                if self.is_print:
                     print '[Remove All Const] selecting ...'
                 for x_column in x_columns:
                     x_single = x[x_column].values
                     if len(sm.add_constant(x_single).shape) == 1:
                         x_columns.remove(x_column)
-                        if is_print:
+                        if self.is_print:
                             print '[Remove All Const] %d remain, remove %s, all constant' \
                                   % (len(x_columns), x_column, )
                 return x_columns
 
         class BackwardSingleP(AbstractSelection):
-            def __init__(self, p_threshold=0.05):
+            def __init__(self, p_threshold=0.05, is_print=False):
                 self.p_threshold = p_threshold
+                self.is_print = is_print
 
-            def _select(self, x, y, x_columns, is_print=False):
-                if is_print:
+            def _select(self, x, y, x_columns):
+                if self.is_print:
                     print '[Select Single P] selecting ...'
                 for x_column in x_columns:
                     x_single = x[x_column].values
@@ -608,18 +610,19 @@ class RxTools(RxToolsBasic):
                     p_value = model.pvalues[-1]
                     if p_value > self.p_threshold:
                         x_columns.remove(x_column)
-                        if is_print:
+                        if self.is_print:
                             print '[Select Single P] %d remain, remove %s, single p value %.4f' \
                                   % (len(x_columns), x_column, p_value)
                 return x_columns
 
         class BackwardMarginR2(AbstractSelection):
-            def __init__(self, r2_diff_threshold=-np.infty, n_min=1, ):
+            def __init__(self, r2_diff_threshold=-np.infty, n_min=1, is_print=False):
                 self.r2_diff_threshold = r2_diff_threshold
                 self.n_min = n_min
+                self.is_print = is_print
 
-            def _select(self, x, y, x_columns, is_print=False):
-                if is_print:
+            def _select(self, x, y, x_columns):
+                if self.is_print:
                     print '[Select Margin R2] selecting ...'
 
                 if len(x_columns) <= self.n_min:
@@ -639,23 +642,24 @@ class RxTools(RxToolsBasic):
 
                     if best_r2_diff > self.r2_diff_threshold:
                         x_columns.remove(best_x_column)
-                        if is_print:
+                        if self.is_print:
                             print '[Select Margin R2] %d remain, remove %s, %.6f r2 diff' \
                                   % (len(x_columns), best_r2_diff, best_x_column)
                     else:
-                        if is_print:
+                        if self.is_print:
                             print '[Select Margin R2] %d remain, stops, %.6f r2 diff' \
                                   % (len(x_columns), best_r2_diff)
                         break
                 return x_columns
 
         class BackwardMarginT(AbstractSelection):
-            def __init__(self, t_threshold=np.infty, n_min=1, ):
+            def __init__(self, t_threshold=np.infty, n_min=1, is_print=False):
                 self.t_threshold = t_threshold
                 self.n_min = n_min
+                self.is_print = is_print
 
-            def _select(self, x, y, x_columns, is_print=False):
-                if is_print:
+            def _select(self, x, y, x_columns):
+                if self.is_print:
                     print '[Select Margin T] selecting ... %d remain' % (len(x_columns), )
                     print '[Select Margin T] T threshold: %.4f, min num of var: %d' % (self.t_threshold, self.n_min)
 
@@ -666,11 +670,11 @@ class RxTools(RxToolsBasic):
 
                     if min_t_value < self.t_threshold:
                         x_columns.remove(x_column)
-                        if is_print:
+                        if self.is_print:
                             print '[Select Margin T] %d remain, remove %s, t value: %.4f' \
                                   % (len(x_columns), x_column, min_t_value)
                     else:
-                        if is_print:
+                        if self.is_print:
                             print '[Select Margin T] %d remain, stops, t value: %.4f' \
                                   % (len(x_columns), min_t_value)
                         break
@@ -678,13 +682,14 @@ class RxTools(RxToolsBasic):
 
         class BackwardMarginF(AbstractSelection):
 
-            def __init__(self, group_size=5, f_p_value=0.0, n_min=1, ):
+            def __init__(self, group_size=5, f_p_value=0.0, n_min=1, is_print=False):
                 self.group_size = group_size
                 self.f_p_value = f_p_value
                 self.n_min = n_min
+                self.is_print = is_print
 
-            def _select(self, x, y, x_columns, is_print=False):
-                if is_print:
+            def _select(self, x, y, x_columns):
+                if self.is_print:
                     print '[Select Margin F] selecting ... %d remain' % (len(x_columns),)
                     print '[Select Margin F] group size: %d' % (self.group_size,)
                     print '[Select Margin F] F P-value: %.4f, min num of var: %d' % (self.f_p_value, self.n_min)
@@ -697,7 +702,7 @@ class RxTools(RxToolsBasic):
                     if self.f_p_value == 0.0:
                         for x_column in list(reversed(list(group.index))):
                             x_columns.remove(x_column)
-                            if is_print:
+                            if self.is_print:
                                 print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
                                   % (len(x_columns), x_column, f_value)
                     else:
@@ -708,11 +713,11 @@ class RxTools(RxToolsBasic):
                         if f_value > self.f_p_value:
                             for x_column in list(reversed(list(group.index))):
                                 x_columns.remove(x_column)
-                                if is_print:
+                                if self.is_print:
                                     print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
                                       % (len(x_columns), x_column, f_value)
                         else:
-                            if is_print:
+                            if self.is_print:
                                 print '[Select Margin F] %d remain, stops, f value: %.4f' \
                                       % (len(x_columns), f_value)
                             break
@@ -869,3 +874,174 @@ class RxTools(RxToolsBasic):
 
                 return keys_dict_list
 
+    class DataPrepare(object):
+        def __init__(self, data, x_columns=None, y_column='y',
+                     train_range=(0.4, 1.), valid_range=(0.2, 0.4), test_range=(0., 0.2),
+                     is_normalize=False, train_sample_gap=1, init_now=False, ):
+
+            # init data and data_file
+            if isinstance(data, str):
+                self.data_file = data
+                self.data = None
+            else:
+                self.data_file = None
+                if isinstance(data, np.ndarray) or isinstance(data, list):
+                    self.data = pd.DataFrame(data)
+                elif isinstance(data, pd.DataFrame):
+                    self.data = data
+                else:
+                    raise Exception('Unknown type of data!')
+
+            self.train_sample_gap = train_sample_gap
+            self._is_normalized = False
+
+            if init_now:
+                if isinstance(data, str):
+                    self.set_data_from_file(data)
+                self.set_y_column(y_column)
+                self.set_x_columns(x_columns)
+                self.set_train_range(train_range)
+                self.set_valid_range(valid_range)
+                self.set_test_range(test_range)
+                if is_normalize:
+                    self.normalize_data_using_train()
+            else:
+                self.x_columns = x_columns
+                self.y_column = y_column
+                self.train_range = train_range
+                self.valid_range = valid_range
+                self.test_range = test_range
+
+        def set_data_from_file(self, data_file=None):
+            if data_file is None:
+                data_file = self.data_file
+            assert isinstance(data_file, str)
+            if data_file.endswith('.npy'):
+                data = pd.DataFrame(np.load(data_file))
+            elif data_file.endswith('.csv'):
+                data = pd.read_csv(data_file, index_col=0, )
+            else:
+                data = pd.read_pickle(data_file)
+            self.data = data
+            return
+
+
+        def set_x_columns(self, x_columns=None):
+            if x_columns is None:
+                x_columns = self.x_columns
+
+            assert self.data is not None
+
+            if x_columns is None:
+                if self.y_column is not None:
+                    x_columns = self.data.columns.drop(self.y_column)
+                else:
+                    raise Exception('both x_columns and y_column is None')
+            elif isinstance(x_columns, str):
+
+                if 'data' in x_columns and 'self.data' not in x_columns:
+                    x_columns = x_columns.replace('data', 'self.data')
+
+                x_columns = eval(x_columns)
+
+            else:
+                if isinstance(x_columns[0], int):
+                    x_columns = self.data.columns[x_columns]
+
+                for x in x_columns:
+                    assert x in self.data.columns
+            self.x_columns = x_columns
+            return
+
+        def set_y_column(self, y_column=None):
+
+            if y_column is None:
+                y_column = self.y_column
+
+            assert self.data is not None
+
+            if isinstance(y_column, int):
+                y_column = self.data.columns[y_column]
+            elif isinstance(y_column, str):
+                if y_column in self.data.columns:
+                    pass
+                else:
+                    if 'data' in y_column and 'self.data' not in y_column:
+                        y_column = y_column.replace('data', 'self.data')
+                    y_column = eval(y_column)
+            else:
+                raise Exception('Unknown type of y_column')
+
+            self.y_column = y_column
+            return
+
+        def set_train_range(self, train_range=None):
+            if train_range is None:
+                train_range = self.train_range
+            assert self.data is not None
+            self.train_range = self._get_range(train_range)
+
+        def set_valid_range(self, valid_range):
+            if valid_range is None:
+                valid_range = self.valid_range
+            assert self.data is not None
+            self.valid_range = self._get_range(valid_range)
+
+        def set_test_range(self, test_range):
+            if test_range is None:
+                test_range = self.test_range
+            assert self.data is not None
+            self.test_range = self._get_range(test_range)
+
+        def _get_range(self, data_range):
+            assert len(data_range) == 2, 'Wrong data range length'
+            assert data_range[0] <= data_range[1], 'Wrong data range'
+            if isinstance(data_range[0], int) and isinstance(data_range[1], int):
+                return [data_range[0], data_range[1]]
+            else:
+                assert 0 <= data_range[0] <= 1
+                assert 0 <= data_range[1] <= 1
+                n = self.data.shape[0]
+                return [int(round(n * data_range[0])), int(round(n * data_range[1]))]
+
+        def normalize_data_using_train(self, train_range=None):
+            assert not self._is_normalized
+            if train_range is not None:
+                self.set_train_range(train_range)
+            assert self.data is not None
+            data_train = self.data.iloc[self.train_range[0]:self.train_range[1], :]
+            assert len(data_train.shape) == 2
+            self._data_train_mean = data_train.mean()
+            self._data_train_std = data_train.std()
+            self.data = (self.data - self._data_train_mean) / self._data_train_std
+            self._is_normalized = True
+
+        def __str__(self):
+            n_blanks, n_params = 0, 20
+            string = 'Data description:' + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'data_file') + str(self.data_file) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'data_shape') + str(self.data.shape) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'x_columns') + str(list(self.x_columns)) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'y_column') + str(self.y_column) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'train_range') + str(self.train_range) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'train_range_index') + str(self.data.index[self.train_range[0]]) + '   ' + str(self.data.index[self.train_range[1] - 1]) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'valid_range') + str(self.valid_range) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'valid_range_index') + str(self.data.index[self.valid_range[0]]) + '   ' + str(self.data.index[self.valid_range[1] - 1]) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'test_range') + str(self.test_range) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'test_range_index') + str(self.data.index[self.test_range[0]]) + '   ' + str(self.data.index[self.test_range[1] - 1]) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'is_normalize') + str(self._is_normalized) + '\n' + \
+                     ' ' * n_blanks + '%-*s' % (n_params, 'train_sample_gap') + str(self.train_sample_gap)
+            return string
+
+        def set_train_test(self):
+            self.x_train = self.data[self.x_columns].iloc[self.train_range[0]:self.train_range[1]].values
+            self.y_train = self.data[self.y_column].iloc[self.train_range[0]:self.train_range[1]].values
+            self.x_valid = self.data[self.x_columns].iloc[self.valid_range[0]:self.valid_range[1]].values
+            self.y_valid = self.data[self.y_column].iloc[self.valid_range[0]:self.valid_range[1]].values
+            self.x_test = self.data[self.x_columns].iloc[self.test_range[0]:self.test_range[1]].values
+            self.y_test = self.data[self.y_column].iloc[self.test_range[0]:self.test_range[1]].values
+
+            self.x_train_sample = self.x_train[::self.train_sample_gap, :]
+            self.y_train_sample = self.y_train[::self.train_sample_gap]
+            self.x_valid_sample = self.x_valid[::self.train_sample_gap, :]
+            self.y_valid_sample = self.y_valid[::self.train_sample_gap]
