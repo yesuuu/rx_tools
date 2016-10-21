@@ -72,6 +72,23 @@ class RxToolsBasic(object):
     class NpTools(object):
 
         @staticmethod
+        def pdist(matrix, axis=0, dist_type='l2'):
+            """
+            input: dist_type: l2
+            """
+            dist_type_dict = {'l2': lambda x, y: np.sqrt(np.sum((x - y) ** 2))}
+            dist_func = dist_type_dict[dist_type]
+            matrix = matrix.T if axis == 1 else matrix
+            n = matrix.shape[1]
+            dist_matrix = np.zeros((n, n))
+            for i in range(n):
+                for j in range(i):
+                    tmp_dist = dist_func(matrix[:, i], matrix[:, j])
+                    dist_matrix[i, j] = tmp_dist
+                    dist_matrix[j, i] = tmp_dist
+            return dist_matrix
+
+        @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
             assert group_size is not None or group_num is not None
             if group_num is not None:
@@ -114,62 +131,9 @@ class RxToolsBasic(object):
             else:
                 return
 
-        class Log(object):
-
-            def __init__(self, file_format='log/%T', is_to_console=True):
-                folder = os.path.split(file_format)[0]
-                if not folder == '':
-                    if not os.path.isdir(folder):
-                        os.makedirs(folder)
-                if '%T' in file_format:
-                    time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-                    file_format.replace('%T', time_str)
-                elif '%D' in file_format:
-                    time_str = datetime.datetime.now().strftime('%Y-%m-%d')
-                    file_format.replace('%D', time_str)
-                self.file_name = file_format
-                self.is_to_console = is_to_console
-
-            def start(self):
-                self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
-                self.log_obj.start()
-
-            def close(self):
-                self.log_obj.close()
-
-            class PrintLogObject(object):
-                def __init__(self, files, is_to_console=True):
-
-                    self.is_to_console = is_to_console
-                    self.console = sys.__stdout__
-
-                    if isinstance(files, str):
-                        files = [files]
-
-                    self.file_objects = [open(file_, 'w') for file_ in files]
-
-                def write(self, message):
-                    for file_object in self.file_objects:
-                        file_object.write(message)
-                    if self.is_to_console:
-                        self.console.write(message)
-
-                def flush(self):
-                    pass
-
-                def start(self):
-                    sys.stdout = self
-
-                def close(self):
-                    for file_object in self.file_objects:
-                        file_object.close()
-                    sys.stdout = self.console
 
 
 class RxTools(RxToolsBasic):
-    """
-    Some useful tools from FRX.
-    """
 
     class StatisticTest(object):
         """
@@ -843,6 +807,63 @@ class RxTools(RxToolsBasic):
                            }
             default_save_folder = ''
 
+    class Log(object):
+        def __init__(self, file_format='log/%T', is_to_console=True):
+            folder = os.path.split(file_format)[0]
+            if not folder == '':
+                if not os.path.isdir(folder):
+                    os.makedirs(folder)
+            if '%T' in file_format:
+                time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+                file_format = file_format.replace('%T', time_str)
+            elif '%D' in file_format:
+                time_str = datetime.datetime.now().strftime('%Y-%m-%d')
+                file_format = file_format.replace('%D', time_str)
+            self.file_name = file_format
+            self.is_to_console = is_to_console
+
+        def start(self, is_print=False):
+            self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
+            self.log_obj.start()
+            if is_print:
+                print '[log] log starts, to file %s' % (self.file_name, )
+
+        def close(self):
+            self.log_obj.close()
+
+        def save(self, save_file, is_print=False):
+            os.system('cp '+self.file_name+' '+save_file)
+            if is_print:
+                print '[log] log copy to %s' % (save_file, )
+
+        class PrintLogObject(object):
+            def __init__(self, files, is_to_console=True):
+
+                self.is_to_console = is_to_console
+                self.console = sys.__stdout__
+
+                if isinstance(files, str):
+                    files = [files]
+
+                self.file_objects = [open(file_, 'w') for file_ in files]
+
+            def write(self, message):
+                for file_object in self.file_objects:
+                    file_object.write(message)
+                if self.is_to_console:
+                    self.console.write(message)
+
+            def flush(self):
+                pass
+
+            def start(self):
+                sys.stdout = self
+
+            def close(self):
+                for file_object in self.file_objects:
+                    file_object.close()
+                sys.stdout = self.console
+
     class LogAnalysis(object):
 
         @staticmethod
@@ -925,6 +946,20 @@ class RxTools(RxToolsBasic):
             self.data = data
             return
 
+<<<<<<< HEAD
+=======
+        def set_data_from_origin_file(self, data_file=None, ask_or_bid='ask', y_length=60):
+            if data_file is None:
+                data_file = self.data_file
+            assert isinstance(data_file, str) and data_file.endswith('.pic')
+            data_dict = pd.read_pickle(data_file)
+            data = data_dict['x']
+            data_y = data_dict['y'][ask_or_bid].loc[data.index, y_length]
+            data['y'] = np.sign(data_y) * np.log(np.abs(data_y) + 1)
+            data.dropna(axis=0, inplace=True)
+            self.data = data
+            return
+>>>>>>> origin/master
 
         def set_x_columns(self, x_columns=None):
             if x_columns is None:
@@ -981,13 +1016,21 @@ class RxTools(RxToolsBasic):
             assert self.data is not None
             self.train_range = self._get_range(train_range)
 
+<<<<<<< HEAD
         def set_valid_range(self, valid_range):
+=======
+        def set_valid_range(self, valid_range=None):
+>>>>>>> origin/master
             if valid_range is None:
                 valid_range = self.valid_range
             assert self.data is not None
             self.valid_range = self._get_range(valid_range)
 
+<<<<<<< HEAD
         def set_test_range(self, test_range):
+=======
+        def set_test_range(self, test_range=None):
+>>>>>>> origin/master
             if test_range is None:
                 test_range = self.test_range
             assert self.data is not None
@@ -1022,6 +1065,10 @@ class RxTools(RxToolsBasic):
                      ' ' * n_blanks + '%-*s' % (n_params, 'data_file') + str(self.data_file) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'data_shape') + str(self.data.shape) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'x_columns') + str(list(self.x_columns)) + '\n' + \
+<<<<<<< HEAD
+=======
+                     ' ' * n_blanks + '%-*s' % (n_params, 'x_num') + str(len(list(self.x_columns))) + '\n' + \
+>>>>>>> origin/master
                      ' ' * n_blanks + '%-*s' % (n_params, 'y_column') + str(self.y_column) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_range') + str(self.train_range) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_range_index') + str(self.data.index[self.train_range[0]]) + '   ' + str(self.data.index[self.train_range[1] - 1]) + '\n' + \
@@ -1033,6 +1080,7 @@ class RxTools(RxToolsBasic):
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_sample_gap') + str(self.train_sample_gap)
             return string
 
+<<<<<<< HEAD
         def set_train_test(self):
             self.x_train = self.data[self.x_columns].iloc[self.train_range[0]:self.train_range[1]].values
             self.y_train = self.data[self.y_column].iloc[self.train_range[0]:self.train_range[1]].values
@@ -1045,3 +1093,34 @@ class RxTools(RxToolsBasic):
             self.y_train_sample = self.y_train[::self.train_sample_gap]
             self.x_valid_sample = self.x_valid[::self.train_sample_gap, :]
             self.y_valid_sample = self.y_valid[::self.train_sample_gap]
+=======
+        def set_train_test(self, output_type='DataFrame'):
+            self.x_train = self.data[self.x_columns].iloc[self.train_range[0]:self.train_range[1]]
+            self.y_train = self.data[self.y_column].iloc[self.train_range[0]:self.train_range[1]]
+            self.x_valid = self.data[self.x_columns].iloc[self.valid_range[0]:self.valid_range[1]]
+            self.y_valid = self.data[self.y_column].iloc[self.valid_range[0]:self.valid_range[1]]
+            self.x_test = self.data[self.x_columns].iloc[self.test_range[0]:self.test_range[1]]
+            self.y_test = self.data[self.y_column].iloc[self.test_range[0]:self.test_range[1]]
+
+            self.x_train_sample = self.x_train.iloc[::self.train_sample_gap, :]
+            self.y_train_sample = self.y_train.iloc[::self.train_sample_gap]
+            self.x_valid_sample = self.x_valid.iloc[::self.train_sample_gap, :]
+            self.y_valid_sample = self.y_valid.iloc[::self.train_sample_gap]
+
+            if output_type in ('array', 'ndarray', 'Array'):
+                self.x_train = self.x_train.values
+                self.y_train = self.y_train.values
+                self.x_valid = self.x_valid.values
+                self.y_valid = self.y_valid.values
+                self.x_test = self.x_test.values
+                self.y_test = self.y_test.values
+
+                self.x_train_sample = self.x_train_sample.values
+                self.y_train_sample = self.y_train_sample.values
+                self.x_valid_sample = self.x_valid_sample.values
+                self.y_valid_sample = self.y_valid_sample.values
+            elif output_type in ('DataFrame', 'dataFrame', 'dataframe'):
+                pass
+            else:
+                raise Exception('Unknown type of output_type %s' % (output_type, ))
+>>>>>>> origin/master
