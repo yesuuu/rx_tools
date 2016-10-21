@@ -132,7 +132,6 @@ class RxToolsBasic(object):
                 return
 
 
-
 class RxTools(RxToolsBasic):
 
     class StatisticTest(object):
@@ -946,8 +945,6 @@ class RxTools(RxToolsBasic):
             self.data = data
             return
 
-<<<<<<< HEAD
-=======
         def set_data_from_origin_file(self, data_file=None, ask_or_bid='ask', y_length=60):
             if data_file is None:
                 data_file = self.data_file
@@ -959,7 +956,6 @@ class RxTools(RxToolsBasic):
             data.dropna(axis=0, inplace=True)
             self.data = data
             return
->>>>>>> origin/master
 
         def set_x_columns(self, x_columns=None):
             if x_columns is None:
@@ -1016,21 +1012,13 @@ class RxTools(RxToolsBasic):
             assert self.data is not None
             self.train_range = self._get_range(train_range)
 
-<<<<<<< HEAD
-        def set_valid_range(self, valid_range):
-=======
         def set_valid_range(self, valid_range=None):
->>>>>>> origin/master
             if valid_range is None:
                 valid_range = self.valid_range
             assert self.data is not None
             self.valid_range = self._get_range(valid_range)
 
-<<<<<<< HEAD
-        def set_test_range(self, test_range):
-=======
         def set_test_range(self, test_range=None):
->>>>>>> origin/master
             if test_range is None:
                 test_range = self.test_range
             assert self.data is not None
@@ -1065,10 +1053,7 @@ class RxTools(RxToolsBasic):
                      ' ' * n_blanks + '%-*s' % (n_params, 'data_file') + str(self.data_file) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'data_shape') + str(self.data.shape) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'x_columns') + str(list(self.x_columns)) + '\n' + \
-<<<<<<< HEAD
-=======
                      ' ' * n_blanks + '%-*s' % (n_params, 'x_num') + str(len(list(self.x_columns))) + '\n' + \
->>>>>>> origin/master
                      ' ' * n_blanks + '%-*s' % (n_params, 'y_column') + str(self.y_column) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_range') + str(self.train_range) + '\n' + \
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_range_index') + str(self.data.index[self.train_range[0]]) + '   ' + str(self.data.index[self.train_range[1] - 1]) + '\n' + \
@@ -1080,20 +1065,6 @@ class RxTools(RxToolsBasic):
                      ' ' * n_blanks + '%-*s' % (n_params, 'train_sample_gap') + str(self.train_sample_gap)
             return string
 
-<<<<<<< HEAD
-        def set_train_test(self):
-            self.x_train = self.data[self.x_columns].iloc[self.train_range[0]:self.train_range[1]].values
-            self.y_train = self.data[self.y_column].iloc[self.train_range[0]:self.train_range[1]].values
-            self.x_valid = self.data[self.x_columns].iloc[self.valid_range[0]:self.valid_range[1]].values
-            self.y_valid = self.data[self.y_column].iloc[self.valid_range[0]:self.valid_range[1]].values
-            self.x_test = self.data[self.x_columns].iloc[self.test_range[0]:self.test_range[1]].values
-            self.y_test = self.data[self.y_column].iloc[self.test_range[0]:self.test_range[1]].values
-
-            self.x_train_sample = self.x_train[::self.train_sample_gap, :]
-            self.y_train_sample = self.y_train[::self.train_sample_gap]
-            self.x_valid_sample = self.x_valid[::self.train_sample_gap, :]
-            self.y_valid_sample = self.y_valid[::self.train_sample_gap]
-=======
         def set_train_test(self, output_type='DataFrame'):
             self.x_train = self.data[self.x_columns].iloc[self.train_range[0]:self.train_range[1]]
             self.y_train = self.data[self.y_column].iloc[self.train_range[0]:self.train_range[1]]
@@ -1123,4 +1094,3 @@ class RxTools(RxToolsBasic):
                 pass
             else:
                 raise Exception('Unknown type of output_type %s' % (output_type, ))
->>>>>>> origin/master
