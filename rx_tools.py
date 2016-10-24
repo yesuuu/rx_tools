@@ -90,7 +90,6 @@ class RxToolsBasic(object):
 
         @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
-            assert group_size is not None or group_num is not None
             if group_num is not None:
                 group_num = int(group_num)
                 assert group_size is None
@@ -99,13 +98,14 @@ class RxToolsBasic(object):
                 nums = [(group_size_small + 1 if i < group_num_big else group_size_small)
                         for i in range(group_num)]
                 nums.insert(0, 0)
-            if group_size is not None:
+            elif group_size is not None:
                 group_size = int(group_size)
-                assert group_num is None
                 group_num = int(np.ceil(len(arr) * 1.0 / group_size))
                 nums = [group_size] * (len(arr) / group_size) + [(len(arr) % group_size)]
                 nums.insert(0, 0)
-            indexs = np.cumsum(nums)
+            else:
+                raise Exception
+            indexs = np.cumsum(np.array(nums))
             new_arr = []
             for i in range(group_num):
                 new_arr.append(arr[indexs[i]:indexs[i + 1]])
@@ -431,7 +431,8 @@ class RxTools(RxToolsBasic):
                     else:
                         mean_list.append(np.mean(y[np.argsort(y_hat)[-batch_size * (b + 1):-batch_size * b]]))
             elif top_type in ('bottom', 'b', 'BOTTOM', 'B', 'Bottom'):
-                mean_list = [np.mean(y[np.argsort(y_hat)[batch_size * b:batch_size * (b + 1)]]) for b in range(batch_num)]
+                mean_list = [np.mean(y[np.argsort(y_hat)[batch_size * b:batch_size * (b + 1)]])
+                             for b in range(batch_num)]
             elif top_type == 'both':
                 mean_list = []
                 for b in range(batch_num):
