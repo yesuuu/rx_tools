@@ -668,7 +668,7 @@ class RxTools(RxToolsBasic):
                             x_columns.remove(x_column)
                             if self.is_print:
                                 print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
-                                  % (len(x_columns), x_column, f_value)
+                                  % (len(x_columns), x_column, np.nan)
                     else:
                         restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
                         f_test_res = bench.compare_f_test(restricted_model)
