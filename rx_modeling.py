@@ -1,9 +1,13 @@
 import sys
 import os
 import datetime
+import re
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+import seaborn
 
 
 class RxModeling(object):
@@ -185,6 +189,10 @@ class RxModeling(object):
             else:
                 raise Exception('Unknown type of output_type %s' % (output_type, ))
 
+        def copy(self):
+            new = self.__init__()
+            return new
+
         def __str__(self):
             n_params = 20
             string = \
@@ -259,6 +267,81 @@ class RxModeling(object):
                 for file_object in self.file_objects:
                     file_object.close()
                 sys.stdout = self.console
+
+    class TimeSave(object):
+        pass
+
+    class LogAnalysis(object):
+
+        @staticmethod
+        def log_analysis_single_re(log_str, expression, keys, functions=None):
+            if isinstance(keys, str):
+                keys = [keys]
+            if functions is not None:
+                assert len(keys) == len(functions)
+            mappings = re.findall(expression, log_str)
+            if not mappings:
+                print 'Warning: no matches in log_str'
+                return []
+
+            elif len(mappings) >= 1:
+                keys_dict_list = []
+                for mapping in mappings:
+                    if functions:
+                        if len(keys) == 1:
+                            keys_dict_list.append({keys[0]: functions[0](mapping)})
+                        else:
+                            assert len(keys) == len(mapping) == len(functions)
+                            keys_dict_list.append({keys[i]: functions[i](mapping[i]) for i in range(len(keys))})
+                    else:
+                        if len(keys) == 1:
+                            keys_dict_list.append({keys[0]: mapping})
+                        else:
+                            assert len(keys) == len(mapping)
+                            keys_dict_list.append({keys[i]: mapping[i] for i in range(len(keys))})
+
+                return keys_dict_list
+
+    class X(object):
+
+        @staticmethod
+        def calc_basic_statistics(x, info=None):
+            info = ['mean', 'std', 'skew', 'kurt', 'num', 'num_out3std', 'num_out10std'] \
+                if info is None else info
+
+            x = np.array(x).ravel()
+
+            func_map = {'mean': np.mean,
+                        'std': np.std,
+                        'skew': stats.skew,
+                        'kurt': stats.kurtosis,
+                        'num': len,
+                        'num_out3std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 3 * np.std(x_func)) +
+                                                      np.sum((x_func - np.mean(x_func)) < -3 * np.std(x_func)),
+                        'num_out10std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 10 * np.std(x_func)) +
+                                                       np.sum((x_func - np.mean(x_func)) < -10 * np.std(x_func)),
+                        }
+            basic_statistic_dict = {key: func_map[key](x) for key in info if key in func_map}
+            basic_statistic_series = pd.Series(basic_statistic_dict, index=info)
+            return basic_statistic_series
+
+    class YHat(object):
+
+        @staticmethod
+        def calc_outr2(y, y_hat):
+            y, y_hat = np.array(y), np.array(y_hat)
+            y_mean = np.mean(y)
+            return 1 - np.sum((y - y_hat) ** 2) / np.sum((y - y_mean) ** 2)
+
+    class Function(object):
+
+        @staticmethod
+        def test_func(func, *range_):
+            x = np.arange(*range_)
+            y = func(x)
+            plt.plot(x, y)
+            plt.show()
+            return
 
     class VariableSelection(object):
         """
@@ -458,3 +541,13 @@ class RxModeling(object):
                                       % (len(x_columns), f_value)
                             break
                 return x_columns
+
+        class Functions(object):
+
+            @staticmethod
+            def get_variable_path(log_str):
+                remove_path = [item['variable'] for item in RxModeling.LogAnalysis.log_analysis_single_re(
+                    log_str, 'remove (.*),', ['variable'])]
+                return remove_path
+
+
