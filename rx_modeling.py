@@ -2,17 +2,47 @@ import sys
 import os
 import datetime
 import re
+import random
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import seaborn
+from rx_tools import RxTools
 
 
 class RxModeling(object):
 
     class DataPrepare(object):
+
+        class CrossValidationMethod(object):
+            """
+            output: [(train_idx1, test_idx1),
+                     (train_idx2, test_idx2),
+                     ...
+                     (train_idxn, test_idxn),]
+            """
+
+            @staticmethod
+            def k_folds(data_length, n_folders, random_state=None):
+                data_idx = range(data_length)
+                if random_state is not None:
+                    if isinstance(random_state, int):
+                        random.seed(random_state)
+                    random.shuffle(data_idx, random=random_state)
+                group_size_small = data_length / n_folders
+                group_num_big = (data_length % n_folders)
+                nums = [(group_size_small + 1 if i < group_num_big else group_size_small)
+                        for i in range(n_folders)]
+                nums.insert(0, 0)
+                indexs = list(np.cumsum(nums))
+                idx_list = []
+                for k in range(n_folders):
+                    test_idx = data_idx[indexs[k]: indexs[k+1]]
+                    train_idx = data_idx[:indexs[k]] + data_idx[indexs[k+1]:]
+                    idx_list.append((train_idx, test_idx, ))
+                return idx_list
 
         class GetDataFunction(object):
 
@@ -116,7 +146,6 @@ class RxModeling(object):
             self.test_range, self.test_idx = self._get_idx(test_range, range_type, sample_gap)
 
         def _get_idx(self, data_range, range_type=None, sample_gap=1):
-
             if not range_type:
                 if len(data_range) == 2:
                     range_type = 'range'
@@ -139,7 +168,7 @@ class RxModeling(object):
             else:
                 raise Exception('Unknown range_type: %s' % (str(range_type), ))
 
-            data_range = list(data_range[:2]) + [sample_gap]
+            data_range = list(data_range[:2]) + [sample_gap] if data_range is not None else None
             data_idx = self.data.index[data_numidx[::sample_gap]]
 
             return data_range, data_idx
@@ -188,10 +217,7 @@ class RxModeling(object):
                 pass
             else:
                 raise Exception('Unknown type of output_type %s' % (output_type, ))
-
-        def copy(self):
-            new = self.__init__()
-            return new
+            return
 
         def __str__(self):
             n_params = 20
@@ -268,8 +294,26 @@ class RxModeling(object):
                     file_object.close()
                 sys.stdout = self.console
 
-    class TimeSave(object):
-        pass
+    class Time(object):
+        def __init__(self, is_all=True, is_margin=False):
+            self.start_time = None
+            self.last_time = None
+            self.is_all = is_all
+            self.is_margin = is_margin
+
+        def show(self):
+            now = datetime.datetime.now()
+            if self.start_time is None:
+                self.start_time = now
+                print '[Time] Start at:', now
+                if self.is_margin:
+                    self.last_time = now
+            else:
+                if self.is_all:
+                    print '[Time] Since start:', now - self.start_time
+                if self.is_margin:
+                    print '[Time] Since last call:', now - self.last_time
+                    self.last_time = now
 
     class LogAnalysis(object):
 
@@ -306,7 +350,7 @@ class RxModeling(object):
 
         @staticmethod
         def calc_basic_statistics(x, info=None):
-            info = ['mean', 'std', 'skew', 'kurt', 'num', 'num_out3std', 'num_out10std'] \
+            info = ['mean', 'std', 'skew', 'kurt', 'num', 'num_out2std', 'num_out3std', 'num_out5std', 'num_out10std'] \
                 if info is None else info
 
             x = np.array(x).ravel()
@@ -316,8 +360,12 @@ class RxModeling(object):
                         'skew': stats.skew,
                         'kurt': stats.kurtosis,
                         'num': len,
+                        'num_out2std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 2 * np.std(x_func)) +
+                                                      np.sum((x_func - np.mean(x_func)) < -2 * np.std(x_func)),
                         'num_out3std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 3 * np.std(x_func)) +
                                                       np.sum((x_func - np.mean(x_func)) < -3 * np.std(x_func)),
+                        'num_out5std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 5 * np.std(x_func)) +
+                                                      np.sum((x_func - np.mean(x_func)) < -5 * np.std(x_func)),
                         'num_out10std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 10 * np.std(x_func)) +
                                                        np.sum((x_func - np.mean(x_func)) < -10 * np.std(x_func)),
                         }
@@ -549,5 +597,3 @@ class RxModeling(object):
                 remove_path = [item['variable'] for item in RxModeling.LogAnalysis.log_analysis_single_re(
                     log_str, 'remove (.*),', ['variable'])]
                 return remove_path
-
-
