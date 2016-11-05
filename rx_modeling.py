@@ -1,15 +1,16 @@
 import sys
 import os
+import time
 import datetime
 import re
 import random
+import subprocess
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import seaborn
-from rx_tools import RxTools
 
 
 class RxModeling(object):
@@ -249,6 +250,7 @@ class RxModeling(object):
             elif '%D' in file_format:
                 time_str = datetime.datetime.now().strftime('%Y-%m-%d')
                 file_format = file_format.replace('%D', time_str)
+            self.log_obj = None
             self.file_name = file_format
             self.is_to_console = is_to_console
 
@@ -390,6 +392,38 @@ class RxModeling(object):
             plt.plot(x, y)
             plt.show()
             return
+
+        @staticmethod
+        def batch_run(run_list, max_batch=1, wait_time=0, is_print=True, omp_num_threads=1):
+            """
+            input:
+
+            max_batch: batches run at same time
+            wait_time: when one run,
+
+            """
+            run_list = run_list[:]
+            runnings = {}
+
+            while run_list or runnings:
+                for f in runnings.keys():
+                    if runnings[f][0].poll() is not None:
+                        time_diff = datetime.datetime.now() - runnings[f][1]
+                        if is_print:
+                            print '\n[BatchRun process end] %s' \
+                                  '\n[BatchRun process end] use_time: %s' % (f, time_diff)
+                            if len(run_list) == 0:
+                                print '[BatchRun] %d left' % (len(run_list) + len(runnings) - 1, )
+                        runnings.pop(f)
+                if (len(runnings) < max_batch) and run_list:
+                    run_now = run_list.pop(0)
+                    f = subprocess.Popen("OMP_NUM_THREADS=%d %s" % (omp_num_threads, run_now), shell=True)
+                    now = datetime.datetime.now()
+                    if is_print:
+                        print ('\n[BatchRun %d] OMP_NUM_THREADS=%d %s' % (f.pid, omp_num_threads, run_now))
+                        # print '[BatchRun] time:', now
+                    runnings[run_now] = [f, now]
+                    time.sleep(wait_time)
 
     class VariableSelection(object):
         """
@@ -597,3 +631,4 @@ class RxModeling(object):
                 remove_path = [item['variable'] for item in RxModeling.LogAnalysis.log_analysis_single_re(
                     log_str, 'remove (.*),', ['variable'])]
                 return remove_path
+
