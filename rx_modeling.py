@@ -11,7 +11,8 @@ import statsmodels.api as sm
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import seaborn
-
+pd.set_option('expand_frame_repr', False)
+pd.set_option('display.max_columns', 15)
 
 class RxModeling(object):
 
@@ -45,10 +46,10 @@ class RxModeling(object):
                     idx_list.append((train_idx, test_idx, ))
                 return idx_list
 
-        class GetDataFunction(object):
+        class GetData(object):
 
             @staticmethod
-            def get_data_from_file(data_file):
+            def from_file(data_file):
                 assert isinstance(data_file, str)
                 if data_file.endswith('.npy'):
                     data = pd.DataFrame(np.load(data_file))
@@ -59,7 +60,7 @@ class RxModeling(object):
                 return data
 
             @staticmethod
-            def get_data_from_origin_file(data_file, ask_or_bid='ask', y_length=60):
+            def from_origin(data_file, ask_or_bid='ask', y_length=60):
                 assert isinstance(data_file, str) and data_file.endswith('.pic')
                 data_dict = pd.read_pickle(data_file)
                 data = data_dict['x']
@@ -174,23 +175,20 @@ class RxModeling(object):
 
             return data_range, data_idx
 
-        def normalize_data_using_train(self, norm_or_unnorm='norm'):
-            """
-            norm_or_unnorm in ('norm', 'unnorm')
-            """
-            if norm_or_unnorm == 'norm':
-                assert not self._is_normalized
-                data_train = self.data.loc[self.train_idx, :]
-                self._data_train_mean = data_train.mean()
-                self._data_train_std = data_train.std()
-                self.data = (self.data - self._data_train_mean) / self._data_train_std
-                self._is_normalized = True
-            elif norm_or_unnorm == 'unnorm':
-                assert self._is_normalized
-                self.data = self.data * self._data_train_std + self._data_train_mean
-                self._is_normalized = False
-            else:
-                raise Exception('Unknown norm_or_unnorm: %s' % (str(norm_or_unnorm), ))
+        def normalize_using_train(self):
+            assert not self._is_normalized
+            data_train = self.data.loc[self.train_idx, :]
+            self._data_train_mean = data_train.mean()
+            self._data_train_std = data_train.std()
+            self.data = (self.data - self._data_train_mean) / self._data_train_std
+            self._is_normalized = True
+
+        def unnormalize(self):
+            assert self._is_normalized
+            self.data = self.data * self._data_train_std + self._data_train_mean
+            self._is_normalized = False
+            self._data_train_mean = None
+            self._data_train_std = None
             return
 
         def set_train_test(self, output_type='DataFrame'):
@@ -239,23 +237,22 @@ class RxModeling(object):
             return string
 
     class Log(object):
-        def __init__(self, file_format='log/%T', is_to_console=True):
-            folder = os.path.split(file_format)[0]
-            if not folder == '':
-                if not os.path.isdir(folder):
-                    os.makedirs(folder)
-            if '%T' in file_format:
-                time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-                file_format = file_format.replace('%T', time_str)
-            elif '%D' in file_format:
-                time_str = datetime.datetime.now().strftime('%Y-%m-%d')
-                file_format = file_format.replace('%D', time_str)
+        def __init__(self, file_name='log/%T', is_to_console=True):
             self.log_obj = None
-            self.file_name = file_format
+            self.file_name = self.reformat_file_name(file_name)
             self.is_to_console = is_to_console
 
+        @staticmethod
+        def reformat_file_name(file_name):
+            time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+            if '%T' in file_name:
+                file_name = file_name.replace('%T', time_str)
+            if '%D' in file_name:
+                file_name = file_name.replace('%D', time_str.split('T')[0])
+            return file_name
+
         def start(self, is_print=False):
-            self.log_obj = self.PrintLogObject(self.file_name, self.is_to_console)
+            self.log_obj = self.SavePrint(self.file_name, self.is_to_console)
             self.log_obj.start()
             if is_print:
                 print '[log] log starts, to file %s' % (self.file_name, )
@@ -263,12 +260,12 @@ class RxModeling(object):
         def close(self):
             self.log_obj.close()
 
-        def save(self, save_file, is_print=False):
-            os.system('cp '+self.file_name+' '+save_file)
+        def save(self, target, is_print=False):
+            os.system('cp %s %s' % (self.file_name, target))
             if is_print:
-                print '[log] log copy to %s' % (save_file, )
+                print '[log] log copy to %s' % (target,)
 
-        class PrintLogObject(object):
+        class SavePrint(object):
             def __init__(self, files, is_to_console=True):
 
                 self.is_to_console = is_to_console
@@ -297,9 +294,10 @@ class RxModeling(object):
                 sys.stdout = self.console
 
     class Time(object):
-        def __init__(self, is_all=True, is_margin=False):
+        def __init__(self, is_now=False, is_all=False, is_margin=False):
             self.start_time = None
             self.last_time = None
+            self.is_now = is_now
             self.is_all = is_all
             self.is_margin = is_margin
 
@@ -311,6 +309,8 @@ class RxModeling(object):
                 if self.is_margin:
                     self.last_time = now
             else:
+                if self.is_now:
+                    print '[Time] now:', now
                 if self.is_all:
                     print '[Time] Since start:', now - self.start_time
                 if self.is_margin:
@@ -320,12 +320,12 @@ class RxModeling(object):
     class LogAnalysis(object):
 
         @staticmethod
-        def log_analysis_single_re(log_str, expression, keys, functions=None):
+        def single_re(log_str, re_expression, keys, functions=None):
             if isinstance(keys, str):
                 keys = [keys]
             if functions is not None:
                 assert len(keys) == len(functions)
-            mappings = re.findall(expression, log_str)
+            mappings = re.findall(re_expression, log_str)
             if not mappings:
                 print 'Warning: no matches in log_str'
                 return []
@@ -628,7 +628,7 @@ class RxModeling(object):
 
             @staticmethod
             def get_variable_path(log_str):
-                remove_path = [item['variable'] for item in RxModeling.LogAnalysis.log_analysis_single_re(
+                remove_path = [item['variable'] for item in RxModeling.LogAnalysis.single_re(
                     log_str, 'remove (.*),', ['variable'])]
                 return remove_path
 

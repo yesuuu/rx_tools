@@ -60,11 +60,11 @@ class RxToolsBasic(object):
         def calc_time_wrapper(func):
 
             def new_func(*args, **kwargs):
-                time1 = time.clock()
+                time1 = datetime.datetime.now()
                 result = func(*args, **kwargs)
-                time2 = time.clock()
+                time2 = datetime.datetime.now()
                 diff_time = time2 - time1
-                print 'exec time: %.8f s' % (diff_time,)
+                print 'exec time: %.4f s' % (diff_time.total_seconds(),)
                 return result
 
             return new_func
