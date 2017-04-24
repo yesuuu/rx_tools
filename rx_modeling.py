@@ -9,10 +9,14 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import scipy.stats as stats
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn
+
+matplotlib.use("Qt4Agg")
 pd.set_option('expand_frame_repr', False)
 pd.set_option('display.max_columns', 15)
+
 
 class RxModeling(object):
 
@@ -237,6 +241,7 @@ class RxModeling(object):
             return string
 
     class Log(object):
+
         def __init__(self, file_name='log/%T', is_to_console=True):
             self.log_obj = None
             self.file_name = self.reformat_file_name(file_name)
@@ -266,6 +271,7 @@ class RxModeling(object):
                 print '[log] log copy to %s' % (target,)
 
         class SavePrint(object):
+
             def __init__(self, files, is_to_console=True):
 
                 self.is_to_console = is_to_console
@@ -632,3 +638,195 @@ class RxModeling(object):
                     log_str, 'remove (.*),', ['variable'])]
                 return remove_path
 
+    class StatisticTools(object):
+        """
+        normality test: JB test
+        auto-correlation test: Box test
+        """
+
+        @staticmethod
+        def find_pca_order(x, thresholds=None, is_plot=True):
+            """
+            input:
+                thresholds: must has attr '__len__'
+                    default [0.5, 0.8, 0.9, 0.95, 0.99, 0.999]
+            """
+            if thresholds is None:
+                thresholds = [0.5, 0.8, 0.9, 0.95, 0.99, 0.999, ]
+            assert hasattr(thresholds, '__len__')
+
+            pca = PCA()
+            pca.fit(x)
+            ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
+
+            print '-' * 50
+            i, j = 0, 0
+            nums = []
+            while i < len(thresholds) and j < len(ratio_cumsum):
+
+                if ratio_cumsum[j] < thresholds[i]:
+                    j += 1
+                else:
+                    print 'thres:', thresholds[i], '\t\tnums:', j
+                    i += 1
+                    nums.append(j)
+
+            print '-' * 50
+
+            if is_plot:
+                plt.plot(pca.explained_variance_ratio_, label='ratio')
+                plt.plot(ratio_cumsum, label='ratio_cumsum')
+                plt.legend(loc='best')
+                plt.show()
+
+            return pca
+
+        @staticmethod
+        def find_lasso_para(x, y, paras=None, start_exp=-10, end_exp=-1, ):
+            """
+            Output:
+                test_paras, variable_num, coefs
+            """
+            x = np.array(x)
+            y = np.array(y)
+            x = (x - np.mean(x, axis=0)) / np.std(x, axis=0)
+            if paras is None:
+                assert isinstance(start_exp, int)
+                assert isinstance(end_exp, int)
+                assert end_exp >= start_exp
+                paras = [10 ** i for i in range(start_exp, end_exp)]
+            variable_num = []
+            params = []
+            for para in paras:
+                tmp_model = LassoLars(alpha=para)
+                tmp_model.fit(sm.add_constant(x), y)
+                tmp_coef = tmp_model.coef_
+                variable_num.append(np.sum(tmp_coef != 0))
+                params.append(tmp_coef)
+            return paras, variable_num, params
+
+        @staticmethod
+        def jb_test(series, level=0.05, is_print=True):
+            """
+            output: (is_h0_true, p_value, jb_stat, critical value)
+            """
+            series = series[~np.isnan(series)]
+            if len(series) < 100:
+                print 'Warning(in JB test): data length: %d' % (len(series),)
+            skew = stat.skew(series)
+            kurt = stat.kurtosis(series)
+            n = len(series)
+            jb = (n - 1) * (skew ** 2 + kurt ** 2 / 4) / 6
+            p_value = 1 - stat.chi2.cdf(jb, 2)
+            cv = stat.chi2.ppf(1 - level, 2)
+            is_h0_true = False if p_value < level else True
+            if is_print:
+                print ''
+                print '*******  JB TEST  *******'
+                print 'skew: %.4f' % (skew,)
+                print 'kurt: %.4f' % (kurt,)
+                if is_h0_true:
+                    print 'h0 is True: data is normal'
+                else:
+                    print 'h0 is False: data is not normal'
+                print 'p value: %f' % (p_value,)
+                print 'jb stat: %f' % (jb,)
+                print 'critical value: %f' % (cv,)
+            return is_h0_true, p_value, jb, cv
+
+        @staticmethod
+        def box_test(series, lag=10, type_='ljungbox',
+                     level=0.05, is_plot=True, is_print=True):
+            """
+            output: (is_h0_true, p_value, q_stat, critical value)
+            """
+            series = series[~np.isnan(series)]
+            acf = sm.tsa.acf(series, nlags=lag)
+            if is_plot:
+                sm.graphics.tsa.plot_acf(series, lags=lag)
+                plt.show()
+            q_stat = sm.tsa.q_stat(acf[1:], len(series), type=type_)[0][-1]
+            p_value = stat.chi2.sf(q_stat, lag)
+            cv = stat.chi2.ppf(1 - level, lag)
+            is_h0_true = False if p_value < level else True
+            if is_print:
+                print ''
+                print '*******  Ljung Box TEST  *******'
+                if is_h0_true:
+                    print 'h0 is True: data is independent'
+                else:
+                    print 'h0 is False: data is not independent'
+                print 'p value: %f' % (p_value,)
+                print 'q stat: %f' % (q_stat,)
+                print 'critical value: %f' % (cv,)
+            return is_h0_true, p_value, q_stat, cv
+
+        @staticmethod
+        def pair_test(series1, series2, series1_name='series1', series2_name='series2',
+                      level=0.05, is_plot=True, is_print=True):
+            assert len(series1) == len(series2)
+            if len(series1) <= 100:
+                print 'Warning: length of data is %d, smaller than 100' % (len(series1),)
+            dif = np.array(series1) - np.array(series2)
+            dif_cum = np.cumsum(dif)
+            corr1 = np.corrcoef(series1, series2)[0, 1]
+            t_value = np.float(np.mean(dif) / np.sqrt(np.var(dif) / len(dif)))
+            p_value = 2 * (1 - stat.t.cdf(np.abs(t_value), len(dif)))
+            if is_plot:
+                fig = plt.figure(figsize=(20, 15))
+                fig.suptitle('Pair Test')
+                ax = fig.add_subplot(211)
+                plt.plot(np.cumsum(series1), 'b')
+                plt.plot(np.cumsum(series2), 'g')
+                plt.title('Cum Return')
+                plt.legend([series1_name, series2_name], loc='best')
+                ax.text(0.01, 0.99, 'data length: %d' % (len(series1)),
+                        horizontalalignment='left',
+                        verticalalignment='top',
+                        transform=ax.transAxes, color='red', size=16)
+                ax = fig.add_subplot(212)
+                plt.plot(dif_cum)
+                plt.title('Diff Cum Return')
+                ax.text(0.01, 0.99, 't_value: %0.4f\np_value: %0.4f\ncorr: %0.4f' % (t_value, p_value, corr1),
+                        horizontalalignment='left',
+                        verticalalignment='top',
+                        transform=ax.transAxes, color='red', size=16)
+                plt.show()
+            cv = stat.norm.ppf(1 - level / 2)
+            is_h0_true = False if p_value < level else True
+            if is_print:
+                print ''
+                print '*******  Pair T TEST  *******'
+                if is_h0_true:
+                    print 'h0 is True: diff is not significant'
+                else:
+                    print 'h0 is False: diff is significant'
+                print 'p value: %f' % (p_value,)
+                print 't stat: %f' % (t_value,)
+                print 'critical value: %f' % (cv,)
+            return is_h0_true, p_value, t_value, cv
+
+    class NpTools(object):
+
+        @staticmethod
+        def divide_into_group(arr, group_num=None, group_size=None):
+            if group_num is not None:
+                group_num = int(group_num)
+                assert group_size is None
+                group_size_small = len(arr) / group_num
+                group_num_big = (len(arr) % group_num)
+                nums = [(group_size_small + 1 if i < group_num_big else group_size_small)
+                        for i in range(group_num)]
+                nums.insert(0, 0)
+            elif group_size is not None:
+                group_size = int(group_size)
+                group_num = int(np.ceil(len(arr) * 1.0 / group_size))
+                nums = [group_size] * (len(arr) / group_size) + [(len(arr) % group_size)]
+                nums.insert(0, 0)
+            else:
+                raise Exception
+            indexs = np.cumsum(np.array(nums))
+            new_arr = []
+            for i in range(group_num):
+                new_arr.append(arr[indexs[i]:indexs[i + 1]])
+            return new_arr
