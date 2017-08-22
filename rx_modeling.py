@@ -11,6 +11,8 @@ import statsmodels.api as sm
 import scipy.stats as stats
 import matplotlib
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LassoLars
 import seaborn
 
 matplotlib.use("Qt4Agg")
@@ -20,339 +22,97 @@ pd.set_option('display.max_columns', 15)
 
 class RxModeling(object):
 
-    class DataPrepare(object):
+    class LogRelated(object):
 
-        class CrossValidationMethod(object):
-            """
-            output: [(train_idx1, test_idx1),
-                     (train_idx2, test_idx2),
-                     ...
-                     (train_idxn, test_idxn),]
-            """
+        class Log(object):
 
-            @staticmethod
-            def k_folds(data_length, n_folders, random_state=None):
-                data_idx = range(data_length)
-                if random_state is not None:
-                    if isinstance(random_state, int):
-                        random.seed(random_state)
-                    random.shuffle(data_idx, random=random_state)
-                group_size_small = data_length / n_folders
-                group_num_big = (data_length % n_folders)
-                nums = [(group_size_small + 1 if i < group_num_big else group_size_small)
-                        for i in range(n_folders)]
-                nums.insert(0, 0)
-                indexs = list(np.cumsum(nums))
-                idx_list = []
-                for k in range(n_folders):
-                    test_idx = data_idx[indexs[k]: indexs[k+1]]
-                    train_idx = data_idx[:indexs[k]] + data_idx[indexs[k+1]:]
-                    idx_list.append((train_idx, test_idx, ))
-                return idx_list
-
-        class GetData(object):
-
-            @staticmethod
-            def from_file(data_file):
-                assert isinstance(data_file, str)
-                if data_file.endswith('.npy'):
-                    data = pd.DataFrame(np.load(data_file))
-                elif data_file.endswith('.csv'):
-                    data = pd.read_csv(data_file, index_col=0, )
-                else:
-                    data = pd.read_pickle(data_file)
-                return data
-
-            @staticmethod
-            def from_origin(data_file, ask_or_bid='ask', y_length=60):
-                assert isinstance(data_file, str) and data_file.endswith('.pic')
-                data_dict = pd.read_pickle(data_file)
-                data = data_dict['x']
-                data_y = data_dict['y'][ask_or_bid].loc[data.index, y_length]
-                data['y'] = np.sign(data_y) * np.log(np.abs(data_y) + 1)
-                data.dropna(axis=0, inplace=True)
-                return data
-
-        def __init__(self, data=None):
-
-            self.data = data
-            self.data_file = None
-
-            self.train_range = None
-            self.train_idx = None
-            self.valid_range = None
-            self.valid_idx = None
-            self.test_range = None
-            self.test_idx = None
-
-            self._data_train_mean = None
-            self._data_train_std = None
-            self._is_normalized = False
-
-            self.x_train = None
-            self.y_train = None
-            self.x_valid = None
-            self.y_valid = None
-            self.x_test = None
-            self.y_test = None
-
-            self.x_columns = None
-            self.y_column = None
-
-        def set_data(self, data=None, data_file=None):
-            self.data = data if data is not None else self.data
-            self.data_file = data_file if data_file is not None else self.data_file
-
-        def set_x_columns(self, x_columns=None):
-            if x_columns is None:
-                if self.y_column is not None:
-                    x_columns = self.data.columns.drop(self.y_column)
-                else:
-                    raise Exception('both x_columns and y_column is None')
-            elif isinstance(x_columns, str):
-                if 'data' in x_columns and 'self.data' not in x_columns:
-                    x_columns = x_columns.replace('data', 'self.data')
-                x_columns = eval(x_columns)
-            else:
-                if isinstance(x_columns[0], int):
-                    x_columns = self.data.columns[x_columns]
-
-                for x_column in x_columns:
-                    assert x_column in self.data.columns
-            self.x_columns = list(x_columns)
-            return
-
-        def add_x_column(self, x_column_name, x_column_data):
-            self.data[x_column_name] = x_column_data
-            self.x_columns.append(x_column_name)
-
-        def set_y_column(self, y_column):
-            if isinstance(y_column, int):
-                y_column = self.data.columns[y_column]
-            elif isinstance(y_column, str):
-                if y_column in self.data.columns:
-                    pass
-                else:
-                    if 'data' in y_column and 'self.data' not in y_column:
-                        y_column = y_column.replace('data', 'self.data')
-                    y_column = eval(y_column)
-                    assert y_column in self.data.columns
-            else:
-                raise Exception('Unknown type of y_column')
-            self.y_column = y_column
-            return
-
-        def set_train_idx(self, train_range, range_type=None, sample_gap=1):
-            self.train_range, self.train_idx = self._get_idx(train_range, range_type, sample_gap)
-
-        def set_valid_idx(self, valid_range, range_type=None, sample_gap=1):
-            self.valid_range, self.valid_idx = self._get_idx(valid_range, range_type, sample_gap)
-
-        def set_test_idx(self, test_range, range_type=None, sample_gap=1):
-            self.test_range, self.test_idx = self._get_idx(test_range, range_type, sample_gap)
-
-        def _get_idx(self, data_range, range_type=None, sample_gap=1):
-            if not range_type:
-                if len(data_range) == 2:
-                    range_type = 'range'
-                else:
-                    range_type = 'index'
-            if range_type == 'range':
-                data_range = data_range[:2]
-                assert data_range[0] <= data_range[1], 'Wrong data range'
-                if isinstance(data_range[0], int) and isinstance(data_range[1], int):
-                    pass
-                else:
-                    assert 0 <= data_range[0] <= 1
-                    assert 0 <= data_range[1] <= 1
-                    n = self.data.shape[0]
-                    data_range = [int(round(n * data_range[0])), int(round(n * data_range[1]))]
-                data_numidx = range(data_range[0], data_range[1])
-            elif range_type == 'index':
-                data_numidx = data_range
-                data_range = None
-            else:
-                raise Exception('Unknown range_type: %s' % (str(range_type), ))
-
-            data_range = list(data_range[:2]) + [sample_gap] if data_range is not None else None
-            data_idx = self.data.index[data_numidx[::sample_gap]]
-
-            return data_range, data_idx
-
-        def normalize_using_train(self):
-            assert not self._is_normalized
-            data_train = self.data.loc[self.train_idx, :]
-            self._data_train_mean = data_train.mean()
-            self._data_train_std = data_train.std()
-            self.data = (self.data - self._data_train_mean) / self._data_train_std
-            self._is_normalized = True
-
-        def unnormalize(self):
-            assert self._is_normalized
-            self.data = self.data * self._data_train_std + self._data_train_mean
-            self._is_normalized = False
-            self._data_train_mean = None
-            self._data_train_std = None
-            return
-
-        def set_train_test(self, output_type='DataFrame'):
-            """
-            output_type in ('DataFrame', 'ndarray')
-            """
-            if self.train_idx is not None:
-                self.x_train = self.data.loc[self.train_idx, self.x_columns]
-                self.y_train = self.data.loc[self.train_idx, self.y_column]
-            if self.valid_idx is not None:
-                self.x_valid = self.data.loc[self.valid_idx, self.x_columns]
-                self.y_valid = self.data.loc[self.valid_idx, self.y_column]
-            if self.test_idx is not None:
-                self.x_test = self.data.loc[self.test_idx, self.x_columns]
-                self.y_test = self.data.loc[self.test_idx, self.y_column]
-
-            if output_type in ('array', 'ndarray', 'Array'):
-                self.x_train = self.x_train.values if self.x_train is not None else None
-                self.y_train = self.y_train.values if self.y_train is not None else None
-                self.x_valid = self.x_valid.values if self.x_valid is not None else None
-                self.y_valid = self.y_valid.values if self.y_valid is not None else None
-                self.x_test = self.x_test.values if self.x_test is not None else None
-                self.y_test = self.y_test.values if self.y_test is not None else None
-            elif output_type in ('DataFrame', 'dataFrame', 'dataframe'):
-                pass
-            else:
-                raise Exception('Unknown type of output_type %s' % (output_type, ))
-            return
-
-        def __str__(self):
-            n_params = 20
-            string = \
-                'Data description:' + '\n' + \
-                ('' if self.data_file is None else '%-*s' % (n_params, 'data_file') + str(self.data_file) + '\n') + \
-                '%-*s' % (n_params, 'data_shape') + str(self.data.shape) + '\n' + \
-                '%-*s' % (n_params, 'x_columns') + str(list(self.x_columns)) + '\n' + \
-                '%-*s' % (n_params, 'x_num') + str(len(list(self.x_columns))) + '\n' + \
-                '%-*s' % (n_params, 'y_column') + str(self.y_column) + '\n' + \
-                ('' if self.train_range is None else '%-*s' % (n_params, 'train_range') + str(self.train_range) + '\n' +
-                 '%-*s' % (n_params, 'train_range_index') + str(self.data.index[self.train_range[0]]) + '   ' + str(self.data.index[self.train_range[1] - 1]) + '\n') + \
-                ('' if self.valid_range is None else '%-*s' % (n_params, 'valid_range') + str(self.valid_range) + '\n' +
-                 '%-*s' % (n_params, 'valid_range_index') + str(self.data.index[self.valid_range[0]]) + '   ' + str(self.data.index[self.valid_range[1] - 1]) + '\n') + \
-                ('' if self.test_range is None else '%-*s' % (n_params, 'test_range') + str(self.test_range) + '\n' +
-                 '%-*s' % (n_params, 'test_range_index') + str(self.data.index[self.test_range[0]]) + '   ' + str(self.data.index[self.test_range[1] - 1]) + '\n') + \
-                '%-*s' % (n_params, 'is_normalize') + str(self._is_normalized) + '\n'
-            return string
-
-    class Log(object):
-
-        def __init__(self, file_name='log/%T', is_to_console=True):
-            self.log_obj = None
-            self.file_name = self.reformat_file_name(file_name)
-            self.is_to_console = is_to_console
-
-        @staticmethod
-        def reformat_file_name(file_name):
-            time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            if '%T' in file_name:
-                file_name = file_name.replace('%T', time_str)
-            if '%D' in file_name:
-                file_name = file_name.replace('%D', time_str.split('T')[0])
-            return file_name
-
-        def start(self, is_print=False):
-            self.log_obj = self.SavePrint(self.file_name, self.is_to_console)
-            self.log_obj.start()
-            if is_print:
-                print '[log] log starts, to file %s' % (self.file_name, )
-
-        def close(self):
-            self.log_obj.close()
-
-        def save(self, target, is_print=False):
-            os.system('cp %s %s' % (self.file_name, target))
-            if is_print:
-                print '[log] log copy to %s' % (target,)
-
-        class SavePrint(object):
-
-            def __init__(self, files, is_to_console=True):
-
+            def __init__(self, file_name='log/%T', is_to_console=True):
+                self.log_obj = None
+                self.file_name = self.reformat_file_name(file_name)
                 self.is_to_console = is_to_console
-                self.console = sys.__stdout__
 
-                if isinstance(files, str):
-                    files = [files]
+            @staticmethod
+            def reformat_file_name(file_name):
+                time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+                if '%T' in file_name:
+                    file_name = file_name.replace('%T', time_str)
+                if '%D' in file_name:
+                    file_name = file_name.replace('%D', time_str.split('T')[0])
+                return file_name
 
-                self.file_objects = [open(file_, 'w') for file_ in files]
-
-            def write(self, message):
-                for file_object in self.file_objects:
-                    file_object.write(message)
-                if self.is_to_console:
-                    self.console.write(message)
-
-            def flush(self):
-                pass
-
-            def start(self):
-                sys.stdout = self
+            def start(self, is_print=False):
+                self.log_obj = self.SavePrint(self.file_name, self.is_to_console)
+                self.log_obj.start()
+                if is_print:
+                    print '[log] log starts, to file %s' % (self.file_name, )
 
             def close(self):
-                for file_object in self.file_objects:
-                    file_object.close()
-                sys.stdout = self.console
+                self.log_obj.close()
 
-    class Time(object):
-        def __init__(self, is_now=False, is_all=False, is_margin=False):
-            self.start_time = None
-            self.last_time = None
-            self.is_now = is_now
-            self.is_all = is_all
-            self.is_margin = is_margin
+            def save(self, target, is_print=False):
+                os.system('cp %s %s' % (self.file_name, target))
+                if is_print:
+                    print '[log] log copy to %s' % (target,)
 
-        def show(self):
-            now = datetime.datetime.now()
-            if self.start_time is None:
-                self.start_time = now
-                print '[Time] Start at:', now
-                if self.is_margin:
-                    self.last_time = now
-            else:
-                if self.is_now:
-                    print '[Time] now:', now
-                if self.is_all:
-                    print '[Time] Since start:', now - self.start_time
-                if self.is_margin:
-                    print '[Time] Since last call:', now - self.last_time
-                    self.last_time = now
+            class SavePrint(object):
 
-    class LogAnalysis(object):
+                def __init__(self, files, is_to_console=True):
 
-        @staticmethod
-        def single_re(log_str, re_expression, keys, functions=None):
-            if isinstance(keys, str):
-                keys = [keys]
-            if functions is not None:
-                assert len(keys) == len(functions)
-            mappings = re.findall(re_expression, log_str)
-            if not mappings:
-                print 'Warning: no matches in log_str'
-                return []
+                    self.is_to_console = is_to_console
+                    self.console = sys.__stdout__
 
-            elif len(mappings) >= 1:
-                keys_dict_list = []
-                for mapping in mappings:
-                    if functions:
-                        if len(keys) == 1:
-                            keys_dict_list.append({keys[0]: functions[0](mapping)})
+                    if isinstance(files, str):
+                        files = [files]
+
+                    self.file_objects = [open(file_, 'w') for file_ in files]
+
+                def write(self, message):
+                    for file_object in self.file_objects:
+                        file_object.write(message)
+                    if self.is_to_console:
+                        self.console.write(message)
+
+                def flush(self):
+                    pass
+
+                def start(self):
+                    sys.stdout = self
+
+                def close(self):
+                    for file_object in self.file_objects:
+                        file_object.close()
+                    sys.stdout = self.console
+
+        class LogAnalysis(object):
+
+            @staticmethod
+            def single_re(log_str, re_expression, keys, functions=None):
+                if isinstance(keys, str):
+                    keys = [keys]
+                if functions is not None:
+                    assert len(keys) == len(functions)
+                mappings = re.findall(re_expression, log_str)
+                if not mappings:
+                    print 'Warning: no matches in log_str'
+                    return []
+
+                elif len(mappings) >= 1:
+                    keys_dict_list = []
+                    for mapping in mappings:
+                        if functions:
+                            if len(keys) == 1:
+                                keys_dict_list.append({keys[0]: functions[0](mapping)})
+                            else:
+                                assert len(keys) == len(mapping) == len(functions)
+                                keys_dict_list.append({keys[i]: functions[i](mapping[i]) for i in range(len(keys))})
                         else:
-                            assert len(keys) == len(mapping) == len(functions)
-                            keys_dict_list.append({keys[i]: functions[i](mapping[i]) for i in range(len(keys))})
-                    else:
-                        if len(keys) == 1:
-                            keys_dict_list.append({keys[0]: mapping})
-                        else:
-                            assert len(keys) == len(mapping)
-                            keys_dict_list.append({keys[i]: mapping[i] for i in range(len(keys))})
+                            if len(keys) == 1:
+                                keys_dict_list.append({keys[0]: mapping})
+                            else:
+                                assert len(keys) == len(mapping)
+                                keys_dict_list.append({keys[i]: mapping[i] for i in range(len(keys))})
 
-                return keys_dict_list
+                    return keys_dict_list
 
     class X(object):
 
@@ -388,48 +148,6 @@ class RxModeling(object):
             y, y_hat = np.array(y), np.array(y_hat)
             y_mean = np.mean(y)
             return 1 - np.sum((y - y_hat) ** 2) / np.sum((y - y_mean) ** 2)
-
-    class Function(object):
-
-        @staticmethod
-        def test_func(func, *range_):
-            x = np.arange(*range_)
-            y = func(x)
-            plt.plot(x, y)
-            plt.show()
-            return
-
-        @staticmethod
-        def batch_run(run_list, max_batch=1, wait_time=0, is_print=True, omp_num_threads=1):
-            """
-            input:
-
-            max_batch: batches run at same time
-            wait_time: when one run,
-
-            """
-            run_list = run_list[:]
-            runnings = {}
-
-            while run_list or runnings:
-                for f in runnings.keys():
-                    if runnings[f][0].poll() is not None:
-                        time_diff = datetime.datetime.now() - runnings[f][1]
-                        if is_print:
-                            print '\n[BatchRun process end] %s' \
-                                  '\n[BatchRun process end] use_time: %s' % (f, time_diff)
-                            if len(run_list) == 0:
-                                print '[BatchRun] %d left' % (len(run_list) + len(runnings) - 1, )
-                        runnings.pop(f)
-                if (len(runnings) < max_batch) and run_list:
-                    run_now = run_list.pop(0)
-                    f = subprocess.Popen("OMP_NUM_THREADS=%d %s" % (omp_num_threads, run_now), shell=True)
-                    now = datetime.datetime.now()
-                    if is_print:
-                        print ('\n[BatchRun %d] OMP_NUM_THREADS=%d %s' % (f.pid, omp_num_threads, run_now))
-                        # print '[BatchRun] time:', now
-                    runnings[run_now] = [f, now]
-                    time.sleep(wait_time)
 
     class VariableSelection(object):
         """
@@ -634,7 +352,7 @@ class RxModeling(object):
 
             @staticmethod
             def get_variable_path(log_str):
-                remove_path = [item['variable'] for item in RxModeling.LogAnalysis.single_re(
+                remove_path = [item['variable'] for item in RxModeling.LogRelated.LogAnalysis.single_re(
                     log_str, 'remove (.*),', ['variable'])]
                 return remove_path
 
@@ -713,12 +431,12 @@ class RxModeling(object):
             series = series[~np.isnan(series)]
             if len(series) < 100:
                 print 'Warning(in JB test): data length: %d' % (len(series),)
-            skew = stat.skew(series)
-            kurt = stat.kurtosis(series)
+            skew = stats.skew(series)
+            kurt = stats.kurtosis(series)
             n = len(series)
             jb = (n - 1) * (skew ** 2 + kurt ** 2 / 4) / 6
-            p_value = 1 - stat.chi2.cdf(jb, 2)
-            cv = stat.chi2.ppf(1 - level, 2)
+            p_value = 1 - stats.chi2.cdf(jb, 2)
+            cv = stats.chi2.ppf(1 - level, 2)
             is_h0_true = False if p_value < level else True
             if is_print:
                 print ''
@@ -746,8 +464,8 @@ class RxModeling(object):
                 sm.graphics.tsa.plot_acf(series, lags=lag)
                 plt.show()
             q_stat = sm.tsa.q_stat(acf[1:], len(series), type=type_)[0][-1]
-            p_value = stat.chi2.sf(q_stat, lag)
-            cv = stat.chi2.ppf(1 - level, lag)
+            p_value = stats.chi2.sf(q_stat, lag)
+            cv = stats.chi2.ppf(1 - level, lag)
             is_h0_true = False if p_value < level else True
             if is_print:
                 print ''
@@ -771,7 +489,7 @@ class RxModeling(object):
             dif_cum = np.cumsum(dif)
             corr1 = np.corrcoef(series1, series2)[0, 1]
             t_value = np.float(np.mean(dif) / np.sqrt(np.var(dif) / len(dif)))
-            p_value = 2 * (1 - stat.t.cdf(np.abs(t_value), len(dif)))
+            p_value = 2 * (1 - stats.t.cdf(np.abs(t_value), len(dif)))
             if is_plot:
                 fig = plt.figure(figsize=(20, 15))
                 fig.suptitle('Pair Test')
@@ -792,7 +510,7 @@ class RxModeling(object):
                         verticalalignment='top',
                         transform=ax.transAxes, color='red', size=16)
                 plt.show()
-            cv = stat.norm.ppf(1 - level / 2)
+            cv = stats.norm.ppf(1 - level / 2)
             is_h0_true = False if p_value < level else True
             if is_print:
                 print ''
@@ -830,3 +548,187 @@ class RxModeling(object):
             for i in range(group_num):
                 new_arr.append(arr[indexs[i]:indexs[i + 1]])
             return new_arr
+
+        @staticmethod
+        def checkSame(matrix1, matrix2, maxDiff=1e-8, isNan=True, isPrint=True, ):
+            matrix1, matrix2 = np.array(matrix1), np.array(matrix2)
+            assert matrix1.shape == matrix2.shape
+            res = {}
+            if isNan:
+                nan1 = np.isnan(matrix1) & (~np.isnan(matrix2))
+                nan2 = (~np.isnan(matrix1)) & np.isnan(matrix2)
+                res['nan1'] = nan1
+                res['nan2'] = nan2
+                if isPrint:
+                    print 'matrix1 nan alone:',  np.sum(nan1)
+                    print 'matrix2 nan alone:',  np.sum(nan2)
+            diff = (np.abs(matrix1 - matrix2) >= maxDiff)
+            res['diff'] = diff
+            if isPrint:
+                print 'different values:', np.sum(diff)
+            return res
+
+        @staticmethod
+        def countChangePoints(series, isPrint=True):
+            """
+            :return:{'changeNum': len(changePoints),
+                    'changePoints': changePoints}
+            """
+            array = np.array(series)
+            changePoints = []
+            lastState = np.isnan(array[0])
+            for i in range(1, len(array)):
+                newState = np.isnan(array[i])
+                if newState ^ lastState:
+                    changePoints.append(i)
+                    lastState = newState
+            if isPrint:
+                print 'change points:', len(changePoints)
+            return {'changeNum': len(changePoints),
+                    'changePoints': changePoints}
+
+    class PdTools(object):
+
+        @staticmethod
+        def qcut(df, qNum, labels=None, returnBins=False):
+            labels = range(1, qNum+1) if labels is None else labels
+            qcutDf = pd.DataFrame(np.nan, df.index, df.columns)
+            if returnBins:
+                binsDf = pd.DataFrame(np.nan, df.index, range(qNum + 1))
+            for idx, line in df.iterrows():
+                lineNa = line.dropna()
+                if len(lineNa) == 0:
+                    continue
+                res = pd.qcut(lineNa, qNum, labels, returnBins, )
+                if returnBins:
+                    qcutDf.loc[idx][res[0].index] = res[0]
+                    binsDf.loc[idx] = res[1]
+                else:
+                    qcutDf.loc[idx][res.index] = res
+            return (qcutDf, binsDf) if returnBins else qcutDf
+
+    class Plot(object):
+
+        @staticmethod
+        def pie(series, names=None, num=None, is_sorted=True, figKwargs=None, pieKwargs=None):
+            """
+            :param series: pandas.series
+            :param names: None, list, func
+            if None:
+                series.index
+            if func:
+                func(i) for i in series.index
+            :param num: None or int
+            """
+            if callable(names):
+                names = [names(i) for i in series.index]
+            elif names is None:
+                names = series.index
+
+            series = series.copy()
+            series.index = names
+
+            if num is not None:
+                series = series.sort_values(ascending=False)
+                if num < len(series):
+                    othersNum = np.sum(series[num-1:])
+                    series = series[:num-1]
+                    series['OTHERS'] = othersNum
+
+            if is_sorted:
+                series.sort_values(ascending=False, inplace=True)
+
+            plt.figure(**({} if figKwargs is None else figKwargs))
+            plt.pie(series.values, labels=series.index, **({} if pieKwargs is None else pieKwargs))
+
+        @staticmethod
+        def plotQuantile(x, y, plotNum=20, isReg=True, isStd=False, **plotKwargs):
+
+            x, y = np.array(x), np.array(y)
+            valid = (~np.isnan(x)) & (~np.isnan(y))
+            x, y = x[valid], y[valid]
+            xArg = np.argsort(x)
+            x, y = x[xArg], y[xArg]
+            xMean = np.array([np.mean(x[i * (len(x) / plotNum):(i + 1) * (len(x) / plotNum)]) for i in range(plotNum)])
+            yMean = np.array([np.mean(y[i * (len(x) / plotNum):(i + 1) * (len(x) / plotNum)]) for i in range(plotNum)])
+            pd.DataFrame({'x': xMean, 'y':yMean}).plot.scatter('x', 'y', **plotKwargs)
+            plt.title('qq plot')
+
+            if isStd:
+                yStd = np.array([np.std(y[i * (len(x) / plotNum):(i + 1) * (len(x) / plotNum)], ddof=1) for i in range(plotNum)])
+                plt.fill_between(xMean, yMean+yStd, yMean-yStd, alpha=0.3)
+
+            if isReg:
+                model = sm.OLS(yMean, sm.add_constant(xMean)).fit()
+                yHat = xMean * model.params[1] + model.params[0]
+                plt.plot(xMean, yHat)
+
+    class Utils(object):
+
+        class Time(object):
+
+            def __init__(self, is_now=False, is_all=False, is_margin=False):
+                self.start_time = None
+                self.last_time = None
+                self.is_now = is_now
+                self.is_all = is_all
+                self.is_margin = is_margin
+
+            def show(self):
+                now = datetime.datetime.now()
+                if self.start_time is None:
+                    self.start_time = now
+                    print '[Time] Start at:', now
+                    if self.is_margin:
+                        self.last_time = now
+                else:
+                    if self.is_now:
+                        print '[Time] now:', now
+                    if self.is_all:
+                        print '[Time] Since start:', now - self.start_time
+                    if self.is_margin:
+                        print '[Time] Since last call:', now - self.last_time
+                        self.last_time = now
+
+        class Function(object):
+
+            @staticmethod
+            def test_func(func, *range_):
+                x = np.arange(*range_)
+                y = func(x)
+                plt.plot(x, y)
+                plt.show()
+                return
+
+            @staticmethod
+            def batch_run(run_list, max_batch=1, wait_time=0, is_print=True, omp_num_threads=1):
+                """
+                input:
+
+                max_batch: batches run at same time
+                wait_time: when one run,
+
+                """
+                run_list = run_list[:]
+                runnings = {}
+
+                while run_list or runnings:
+                    for f in runnings.keys():
+                        if runnings[f][0].poll() is not None:
+                            time_diff = datetime.datetime.now() - runnings[f][1]
+                            if is_print:
+                                print '\n[BatchRun process end] %s' \
+                                      '\n[BatchRun process end] use_time: %s' % (f, time_diff)
+                                if len(run_list) == 0:
+                                    print '[BatchRun] %d left' % (len(run_list) + len(runnings) - 1,)
+                            runnings.pop(f)
+                    if (len(runnings) < max_batch) and run_list:
+                        run_now = run_list.pop(0)
+                        f = subprocess.Popen("OMP_NUM_THREADS=%d %s" % (omp_num_threads, run_now), shell=True)
+                        now = datetime.datetime.now()
+                        if is_print:
+                            print ('\n[BatchRun %d] OMP_NUM_THREADS=%d %s' % (f.pid, omp_num_threads, run_now))
+                            # print '[BatchRun] time:', now
+                        runnings[run_now] = [f, now]
+                        time.sleep(wait_time)
+
