@@ -114,6 +114,259 @@ class RxModeling(object):
 
                     return keys_dict_list
 
+    class fitRelated(object):
+
+        class VariableSelection(object):
+            """
+            cache keys:
+
+                conflicts: dict
+                    for MarginF
+                    {'x1': ['x2', 'x3', ...]
+                     'x4': ['x5']
+                     'x10': ['x1]
+                     ...
+                    }
+
+                remove_x_path: list
+                    ['x1', 'x2', 'x3', ...]
+            """
+
+            class AbstractSelection(object):
+
+                @staticmethod
+                def _check_data(x, y):
+                    if isinstance(x, pd.DataFrame):
+                        pass
+                    elif isinstance(x, np.ndarray):
+                        x = pd.DataFrame(x)
+                    else:
+                        raise TypeError('Unknown type of x')
+                    assert len(x.shape) == 2
+                    y = np.array(y).ravel()
+                    assert x.shape[0] == len(y)
+                    if len(y) < 100:
+                        print 'Warning: data length %d too small ' % (len(y),)
+                    return x, y
+
+                def select(self, x, y, x_columns=None, cache={}):
+                    x, y = self._check_data(x, y)
+                    if x_columns is None:
+                        x_columns = list(x.columns)
+                    else:
+                        x_columns = list(x_columns)
+                        for x_column in x_columns:
+                            assert x_column in x.columns
+                    return self._select(x, y, x_columns, cache=cache)
+
+                def _select(self, x, y, x_columns, cache={}):
+                    raise NotImplementedError
+
+            class RemoveAllConst(AbstractSelection):
+
+                def __init__(self, is_print=False):
+                    self.is_print = is_print
+
+                def _select(self, x, y, x_columns, cache={}):
+                    if self.is_print:
+                        print '[Remove All Const] selecting ...'
+                    for x_column in x_columns:
+                        x_single = x[x_column].values
+                        if len(sm.add_constant(x_single).shape) == 1:
+                            x_columns.remove(x_column)
+                            if self.is_print:
+                                print '[Remove All Const] %d remain, remove %s, all constant' \
+                                      % (len(x_columns), x_column,)
+                    return x_columns
+
+            class BackwardSingleP(AbstractSelection):
+                def __init__(self, p_threshold=0.05, is_print=False):
+                    self.p_threshold = p_threshold
+                    self.is_print = is_print
+
+                def _select(self, x, y, x_columns, cache={}):
+                    if self.is_print:
+                        print '[Select Single P] selecting ...'
+                    for x_column in x_columns:
+                        x_single = x[x_column].values
+                        x_reg = sm.add_constant(x_single)
+                        model = sm.OLS(y, x_reg).fit()
+                        p_value = model.pvalues[-1]
+                        if p_value > self.p_threshold:
+                            x_columns.remove(x_column)
+                            if self.is_print:
+                                print '[Select Single P] %d remain, remove %s, single p value %.4f' \
+                                      % (len(x_columns), x_column, p_value)
+                    return x_columns
+
+            class BackwardMarginR2(AbstractSelection):
+                def __init__(self, r2_diff_threshold=-np.infty, n_min=1, is_print=False):
+                    self.r2_diff_threshold = r2_diff_threshold
+                    self.n_min = n_min
+                    self.is_print = is_print
+
+                def _select(self, x, y, x_columns, cache={}):
+                    if self.is_print:
+                        print '[Select Margin R2] selecting ...'
+
+                    if len(x_columns) <= self.n_min:
+                        return x_columns
+
+                    while len(x_columns) > self.n_min:
+
+                        bench_r2 = sm.OLS(y, x[x_columns]).fit().rsquared_adj
+                        best_r2_diff, best_x_column = -np.inf, None
+
+                        for x_column in x_columns:
+                            x_columns_tmp = x_columns[:]
+                            x_columns_tmp.remove(x_column)
+                            tmp_r2_diff = sm.OLS(y, x[x_columns_tmp]).fit().rsquared_adj - bench_r2
+                            if tmp_r2_diff > best_r2_diff:
+                                best_r2_diff, best_x_column = tmp_r2_diff, x_column
+
+                        if best_r2_diff > self.r2_diff_threshold:
+                            x_columns.remove(best_x_column)
+                            if self.is_print:
+                                print '[Select Margin R2] %d remain, remove %s, %.6f r2 diff' \
+                                      % (len(x_columns), best_r2_diff, best_x_column)
+                        else:
+                            if self.is_print:
+                                print '[Select Margin R2] %d remain, stops, %.6f r2 diff' \
+                                      % (len(x_columns), best_r2_diff)
+                            break
+                    return x_columns
+
+            class BackwardMarginT(AbstractSelection):
+                def __init__(self, t_threshold=np.infty, n_min=1, is_print=False):
+                    self.t_threshold = t_threshold
+                    self.n_min = n_min
+                    self.is_print = is_print
+
+                def _select(self, x, y, x_columns, cache={}):
+                    if self.is_print:
+                        print '[Select Margin T] selecting ... %d remain' % (len(x_columns),)
+                        print '[Select Margin T] T threshold: %.4f, min num of var: %d' % (self.t_threshold, self.n_min)
+
+                    while len(x_columns) > self.n_min:
+
+                        t_values = sm.OLS(y, x[x_columns]).fit().tvalues.abs().sort_values()
+                        x_column, min_t_value = t_values.index[0], t_values[0]
+
+                        if min_t_value < self.t_threshold:
+                            x_columns.remove(x_column)
+                            if self.is_print:
+                                print '[Select Margin T] %d remain, remove %s, t value: %.4f' \
+                                      % (len(x_columns), x_column, min_t_value)
+                        else:
+                            if self.is_print:
+                                print '[Select Margin T] %d remain, stops, t value: %.4f' \
+                                      % (len(x_columns), min_t_value)
+                            break
+                    return x_columns
+
+            class BackwardMarginF(AbstractSelection):
+
+                def __init__(self, group_size=5, f_p_value=0.0, n_min=1, is_print=False):
+                    self.group_size = group_size
+                    self.f_p_value = f_p_value
+                    self.n_min = n_min
+                    self.is_print = is_print
+
+                def _select(self, x, y, x_columns, cache={}):
+                    if self.is_print:
+                        print '[Select Margin F] selecting ... %d remain' % (len(x_columns),)
+                        print '[Select Margin F] group size: %d' % (self.group_size,)
+                        print '[Select Margin F] F P-value: %.4f, min num of var: %d' % (self.f_p_value, self.n_min)
+                    while len(x_columns) > self.n_min:
+                        bench = sm.OLS(y, x[x_columns]).fit()
+                        p_values_sorted = bench.pvalues.sort_values(ascending=False)
+                        for count_i in range(self.group_size):
+                            x_name = p_values_sorted.index[count_i]
+                            conflicts = cache.get('conflicts', {})
+                            for x_other in conflicts.get(x_name, []):
+                                try:
+                                    p_values_sorted.drop(x_other, inplace=True)
+                                except:
+                                    pass
+                        group = p_values_sorted[:self.group_size]
+                        print '[Select Margin F]', list(group.index)
+                        print '[Select Margin F]', list(group.values)
+                        if self.f_p_value == 0.0:
+                            for x_column in list(group.index):
+                                x_columns.remove(x_column)
+                                if self.is_print:
+                                    print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
+                                          % (len(x_columns), x_column, np.nan)
+                        else:
+                            restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
+                            f_test_res = bench.compare_f_test(restricted_model)
+                            print f_test_res
+                            f_value = f_test_res[1]
+                            if f_value > self.f_p_value:
+                                for x_column in list(reversed(list(group.index))):
+                                    x_columns.remove(x_column)
+                                    if self.is_print:
+                                        print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
+                                              % (len(x_columns), x_column, f_value)
+                            else:
+                                if self.is_print:
+                                    print '[Select Margin F] %d remain, stops, f value: %.4f' \
+                                          % (len(x_columns), f_value)
+                                break
+                    return x_columns
+
+            class Functions(object):
+
+                @staticmethod
+                def get_variable_path(log_str):
+                    remove_path = [item['variable'] for item in RxModeling.LogRelated.LogAnalysis.single_re(
+                        log_str, 'remove (.*),', ['variable'])]
+                    return remove_path
+
+        @staticmethod
+        def normalizeByVectors(rawDf, vectorDfs, addConstant=True, minObs=100):
+            vectors = [vdf.loc[rawDf.index, rawDf.columns].values for vdf in vectorDfs]
+            if addConstant:
+                vectors.insert(0, np.ones(rawDf.shape))
+
+            vectorPanel = pd.Panel(vectors, major_axis=rawDf.index, minor_axis=rawDf.columns)
+
+            coefDict = {}
+            resDf = pd.DataFrame(index=rawDf.index, columns=rawDf.columns)
+            for idx, rawLine in rawDf.iterrows():
+                y = rawLine.values
+                x = vectorPanel.loc[:, idx, :].values
+                valid = np.all(~np.isnan(x), axis=1) & (~np.isnan(y))
+                if np.sum(valid) <= minObs:
+                    continue
+                xReg, yReg = x[valid], y[valid]
+                regModel = sm.OLS(yReg, xReg).fit()
+                coefDict[idx] = regModel.params
+                res = np.full(y.shape, np.nan, )
+                res[valid] = regModel.resid
+                resDf.loc[idx] = res
+            return {'residual': resDf, 'coefDict': coefDict}
+
+        @staticmethod
+        def normalizeByVectorPoly(rawDf, vectorDf, degree=3, minObs=100):
+            coefDict = {}
+            resDf = pd.DataFrame(index=rawDf.index, columns=rawDf.columns)
+            for idx, rawLine in rawDf.iterrows():
+                y = rawLine.values
+                x = vectorDf.loc[idx, :].values
+                valid = (~np.isnan(x)) & (~np.isnan(y))
+                if np.sum(valid) <= minObs:
+                    continue
+                xValid, yValid = x[valid], y[valid]
+                polyArgs = np.polyfit(xValid, yValid, degree)
+                coefDict[idx] = polyArgs
+                polyFunc = lambda x: np.sum([polyArgs[i] * x ** (degree - i) for i in range(degree + 1)])
+
+                res = np.full(y.shape, np.nan, )
+                res[valid] = yValid - polyFunc(xValid)
+                resDf.loc[idx] = res
+            return {'residual': resDf, 'coefDict': coefDict}
+
     class X(object):
 
         @staticmethod
@@ -148,213 +401,6 @@ class RxModeling(object):
             y, y_hat = np.array(y), np.array(y_hat)
             y_mean = np.mean(y)
             return 1 - np.sum((y - y_hat) ** 2) / np.sum((y - y_mean) ** 2)
-
-    class VariableSelection(object):
-        """
-        cache keys:
-
-            conflicts: dict
-                for MarginF
-                {'x1': ['x2', 'x3', ...]
-                 'x4': ['x5']
-                 'x10': ['x1]
-                 ...
-                }
-
-            remove_x_path: list
-                ['x1', 'x2', 'x3', ...]
-        """
-
-        class AbstractSelection(object):
-
-            @staticmethod
-            def _check_data(x, y):
-                if isinstance(x, pd.DataFrame):
-                    pass
-                elif isinstance(x, np.ndarray):
-                    x = pd.DataFrame(x)
-                else:
-                    raise TypeError('Unknown type of x')
-                assert len(x.shape) == 2
-                y = np.array(y).ravel()
-                assert x.shape[0] == len(y)
-                if len(y) < 100:
-                    print 'Warning: data length %d too small ' % (len(y),)
-                return x, y
-
-            def select(self, x, y, x_columns=None, cache={}):
-                x, y = self._check_data(x, y)
-                if x_columns is None:
-                    x_columns = list(x.columns)
-                else:
-                    x_columns = list(x_columns)
-                    for x_column in x_columns:
-                        assert x_column in x.columns
-                return self._select(x, y, x_columns, cache=cache)
-
-            def _select(self, x, y, x_columns, cache={}):
-                raise NotImplementedError
-
-        class RemoveAllConst(AbstractSelection):
-
-            def __init__(self, is_print=False):
-                self.is_print = is_print
-
-            def _select(self, x, y, x_columns, cache={}):
-                if self.is_print:
-                    print '[Remove All Const] selecting ...'
-                for x_column in x_columns:
-                    x_single = x[x_column].values
-                    if len(sm.add_constant(x_single).shape) == 1:
-                        x_columns.remove(x_column)
-                        if self.is_print:
-                            print '[Remove All Const] %d remain, remove %s, all constant' \
-                                  % (len(x_columns), x_column, )
-                return x_columns
-
-        class BackwardSingleP(AbstractSelection):
-            def __init__(self, p_threshold=0.05, is_print=False):
-                self.p_threshold = p_threshold
-                self.is_print = is_print
-
-            def _select(self, x, y, x_columns, cache={}):
-                if self.is_print:
-                    print '[Select Single P] selecting ...'
-                for x_column in x_columns:
-                    x_single = x[x_column].values
-                    x_reg = sm.add_constant(x_single)
-                    model = sm.OLS(y, x_reg).fit()
-                    p_value = model.pvalues[-1]
-                    if p_value > self.p_threshold:
-                        x_columns.remove(x_column)
-                        if self.is_print:
-                            print '[Select Single P] %d remain, remove %s, single p value %.4f' \
-                                  % (len(x_columns), x_column, p_value)
-                return x_columns
-
-        class BackwardMarginR2(AbstractSelection):
-            def __init__(self, r2_diff_threshold=-np.infty, n_min=1, is_print=False):
-                self.r2_diff_threshold = r2_diff_threshold
-                self.n_min = n_min
-                self.is_print = is_print
-
-            def _select(self, x, y, x_columns, cache={}):
-                if self.is_print:
-                    print '[Select Margin R2] selecting ...'
-
-                if len(x_columns) <= self.n_min:
-                    return x_columns
-
-                while len(x_columns) > self.n_min:
-
-                    bench_r2 = sm.OLS(y, x[x_columns]).fit().rsquared_adj
-                    best_r2_diff, best_x_column = -np.inf, None
-
-                    for x_column in x_columns:
-                        x_columns_tmp = x_columns[:]
-                        x_columns_tmp.remove(x_column)
-                        tmp_r2_diff = sm.OLS(y, x[x_columns_tmp]).fit().rsquared_adj - bench_r2
-                        if tmp_r2_diff > best_r2_diff:
-                            best_r2_diff, best_x_column = tmp_r2_diff, x_column
-
-                    if best_r2_diff > self.r2_diff_threshold:
-                        x_columns.remove(best_x_column)
-                        if self.is_print:
-                            print '[Select Margin R2] %d remain, remove %s, %.6f r2 diff' \
-                                  % (len(x_columns), best_r2_diff, best_x_column)
-                    else:
-                        if self.is_print:
-                            print '[Select Margin R2] %d remain, stops, %.6f r2 diff' \
-                                  % (len(x_columns), best_r2_diff)
-                        break
-                return x_columns
-
-        class BackwardMarginT(AbstractSelection):
-            def __init__(self, t_threshold=np.infty, n_min=1, is_print=False):
-                self.t_threshold = t_threshold
-                self.n_min = n_min
-                self.is_print = is_print
-
-            def _select(self, x, y, x_columns, cache={}):
-                if self.is_print:
-                    print '[Select Margin T] selecting ... %d remain' % (len(x_columns), )
-                    print '[Select Margin T] T threshold: %.4f, min num of var: %d' % (self.t_threshold, self.n_min)
-
-                while len(x_columns) > self.n_min:
-
-                    t_values = sm.OLS(y, x[x_columns]).fit().tvalues.abs().sort_values()
-                    x_column, min_t_value = t_values.index[0], t_values[0]
-
-                    if min_t_value < self.t_threshold:
-                        x_columns.remove(x_column)
-                        if self.is_print:
-                            print '[Select Margin T] %d remain, remove %s, t value: %.4f' \
-                                  % (len(x_columns), x_column, min_t_value)
-                    else:
-                        if self.is_print:
-                            print '[Select Margin T] %d remain, stops, t value: %.4f' \
-                                  % (len(x_columns), min_t_value)
-                        break
-                return x_columns
-
-        class BackwardMarginF(AbstractSelection):
-
-            def __init__(self, group_size=5, f_p_value=0.0, n_min=1, is_print=False):
-                self.group_size = group_size
-                self.f_p_value = f_p_value
-                self.n_min = n_min
-                self.is_print = is_print
-
-            def _select(self, x, y, x_columns, cache={}):
-                if self.is_print:
-                    print '[Select Margin F] selecting ... %d remain' % (len(x_columns),)
-                    print '[Select Margin F] group size: %d' % (self.group_size,)
-                    print '[Select Margin F] F P-value: %.4f, min num of var: %d' % (self.f_p_value, self.n_min)
-                while len(x_columns) > self.n_min:
-                    bench = sm.OLS(y, x[x_columns]).fit()
-                    p_values_sorted = bench.pvalues.sort_values(ascending=False)
-                    for count_i in range(self.group_size):
-                        x_name = p_values_sorted.index[count_i]
-                        conflicts = cache.get('conflicts', {})
-                        for x_other in conflicts.get(x_name, []):
-                            try:
-                                p_values_sorted.drop(x_other, inplace=True)
-                            except:
-                                pass
-                    group = p_values_sorted[:self.group_size]
-                    print '[Select Margin F]', list(group.index)
-                    print '[Select Margin F]', list(group.values)
-                    if self.f_p_value == 0.0:
-                        for x_column in list(group.index):
-                            x_columns.remove(x_column)
-                            if self.is_print:
-                                print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
-                                  % (len(x_columns), x_column, np.nan)
-                    else:
-                        restricted_model = sm.OLS(y, x[x_columns].drop(group.index, axis=1)).fit()
-                        f_test_res = bench.compare_f_test(restricted_model)
-                        print f_test_res
-                        f_value = f_test_res[1]
-                        if f_value > self.f_p_value:
-                            for x_column in list(reversed(list(group.index))):
-                                x_columns.remove(x_column)
-                                if self.is_print:
-                                    print '[Select Margin F] %d remain, remove %s, f p-value: %.4f' \
-                                      % (len(x_columns), x_column, f_value)
-                        else:
-                            if self.is_print:
-                                print '[Select Margin F] %d remain, stops, f value: %.4f' \
-                                      % (len(x_columns), f_value)
-                            break
-                return x_columns
-
-        class Functions(object):
-
-            @staticmethod
-            def get_variable_path(log_str):
-                remove_path = [item['variable'] for item in RxModeling.LogRelated.LogAnalysis.single_re(
-                    log_str, 'remove (.*),', ['variable'])]
-                return remove_path
 
     class StatisticTools(object):
         """
@@ -527,6 +573,12 @@ class RxModeling(object):
     class NpTools(object):
 
         @staticmethod
+        def getValid(xTuple, validFunc=lambda x: ~np.isnan(x)):
+            isValid = [validFunc(x) for x in xTuple]
+            valid = reduce(lambda x, y: x & y, isValid, )
+            return (x[valid] for x in xTuple)
+
+        @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
             if group_num is not None:
                 group_num = int(group_num)
@@ -551,6 +603,12 @@ class RxModeling(object):
 
         @staticmethod
         def checkSame(matrix1, matrix2, maxDiff=1e-8, isNan=True, isPrint=True, ):
+            """
+            :return: {'diff': Bool Matrix,
+                      if isNan:
+                        'nan1': True for matrix1.nan and matrix2.number
+                        'nan2': True for matrix2.nan and matrix1.number}
+            """
             matrix1, matrix2 = np.array(matrix1), np.array(matrix2)
             assert matrix1.shape == matrix2.shape
             res = {}
@@ -569,12 +627,13 @@ class RxModeling(object):
             return res
 
         @staticmethod
-        def countChangePoints(series, isPrint=True):
+        def countChangePoints(arr, isPrint=True):
             """
+            change: nan to number or number to nan.
             :return:{'changeNum': len(changePoints),
                     'changePoints': changePoints}
             """
-            array = np.array(series)
+            array = np.array(arr)
             changePoints = []
             lastState = np.isnan(array[0])
             for i in range(1, len(array)):
@@ -606,6 +665,18 @@ class RxModeling(object):
                 else:
                     qcutDf.loc[idx][res.index] = res
             return (qcutDf, binsDf) if returnBins else qcutDf
+
+        @staticmethod
+        def showNear(dfs, dfNames, recordIndex, backNum=0, forwardNum=0, columns=None, ):
+            dfs = [dfs] if isinstance(dfs, pd.DataFrame) else dfs
+            columns = [columns] if isinstance(columns, str) else columns
+            recordIdx = dfs[0].index.get_loc(recordIndex)
+            startIdx = max(0, recordIdx - backNum)
+            endIdx = min(len(dfs[0]), recordIdx + forwardNum)
+            targetList = [df.iloc[startIdx:endIdx][columns if columns is not None else dfs[0].columns].values
+                          for df in dfs]
+            return pd.Panel(targetList, items=dfNames, major_axis=dfs[0].index[startIdx:endIdx],
+                            minor_axis=columns if columns is not None else dfs[0].columns)
 
     class Plot(object):
 
@@ -663,6 +734,48 @@ class RxModeling(object):
                 yHat = xMean * model.params[1] + model.params[0]
                 plt.plot(xMean, yHat)
 
+        @staticmethod
+        def polyfit(x, y, degree, plotNum=100, **plotKwargs):
+
+            def getPolyFunc(polyArgs):
+                degree = len(polyArgs) - 1
+                polyFunc = lambda x: np.sum([polyArgs[i] * x ** (degree - i) for i in range(degree + 1)])
+                return polyFunc
+
+            x, y = RxModeling.NpTools.getValid((x, y))
+            xArg = np.argsort(x)
+            x, y = x[xArg], y[xArg]
+            polyArgs = np.polyfit(x, y, deg=degree)
+            polyFunc = getPolyFunc(polyArgs)
+            xMean = np.array([np.mean(x[i * (len(x) / plotNum):(i + 1) * (len(x) / plotNum)]) for i in range(plotNum)])
+            yMean = np.array([np.mean(y[i * (len(x) / plotNum):(i + 1) * (len(x) / plotNum)]) for i in range(plotNum)])
+            df = pd.DataFrame({'x': xMean, 'y': yMean})
+            df.plot.scatter('x', 'y', **plotKwargs)
+            plt.title('quantile plot')
+
+            xMin, xMax = np.nanmin(xMean), np.nanmax(xMean)
+            xList = np.arange(xMin, xMax, step=(xMax - xMin) * 1. / 300)
+            yHatList = [polyFunc(x) for x in xList]
+            plt.plot(xList, yHatList)
+            return {'polyArgs': polyArgs,
+                    'polyFunc': polyFunc,
+                    'quantileDf': df,}
+
+        @staticmethod
+        def plot3D(df, **plotKwargs):
+            x = range(df.shape[0])
+            y = range(df.shape[1])
+            z = df.values.T
+            x1, y1 = np.meshgrid(x, y)
+            from matplotlib import cm
+            fig = plt.figure()
+            ax = fig.gca(projection='3d')
+            surf = ax.plot_surface(x1, y1, z, rstride=1, cstride=1, cmap=cm.coolwarm, antialiased=False,
+                                   **plotKwargs)
+            plt.xticks(x, df.index)
+            plt.yticks(y, df.columns)
+            fig.colorbar(surf, shrink=0.5, aspect=5)
+
     class Utils(object):
 
         class Time(object):
@@ -693,10 +806,11 @@ class RxModeling(object):
         class Function(object):
 
             @staticmethod
-            def test_func(func, *range_):
+            def test_funcs(funcs, *range_):
                 x = np.arange(*range_)
-                y = func(x)
-                plt.plot(x, y)
+                ys = [func(x) for func in funcs]
+                for y in ys:
+                    plt.plot(x, y)
                 plt.show()
                 return
 
