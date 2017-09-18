@@ -579,6 +579,12 @@ class RxModeling(object):
             return (x[valid] for x in xTuple)
 
         @staticmethod
+        def getPolyFunc(polyArgs):
+            degree = len(polyArgs) - 1
+            polyFunc = lambda x: np.sum([polyArgs[i] * x ** (degree - i) for i in range(degree + 1)])
+            return polyFunc
+
+        @staticmethod
         def divide_into_group(arr, group_num=None, group_size=None):
             if group_num is not None:
                 group_num = int(group_num)
@@ -677,6 +683,31 @@ class RxModeling(object):
                           for df in dfs]
             return pd.Panel(targetList, items=dfNames, major_axis=dfs[0].index[startIdx:endIdx],
                             minor_axis=columns if columns is not None else dfs[0].columns)
+
+        @staticmethod
+        def winsorize(dataDf, limits=(0.05, 0.05), winType='percent'):
+            """
+            winType: 'percent'('p') or 'std'('s')
+            """
+            if winType in ('std', 's'):
+                mean = dataDf.mean(axis=1)
+                std = dataDf.std(axis=1)
+                lowerLimit = (mean - limits[0] * std).fillna(-np.inf)
+                upperLimit = (mean + limits[1] * std).fillna(np.inf)
+            elif winType in ('percent', 'p'):
+                dfQuantile = pd.DataFrame(index=[limits[0], 1 - limits[1]], columns=dataDf.index)
+                for idx in dataDf.index:
+                    dfQuantile[idx] = dataDf.loc[idx].dropna().quantile([limits[0], 1 - limits[1]])
+                lowerLimit = dfQuantile.iloc[0].fillna(-np.inf)
+                upperLimit = dfQuantile.iloc[1].fillna(np.inf)
+            else:
+                raise Exception('Unknown winType %s' % (winType,))
+            return dataDf.clip(lowerLimit, upperLimit, axis=0)
+
+        @staticmethod
+        def getNearPanel(df, backNum=1, forwardNum=1):
+            idxNum = range(-backNum, forwardNum + 1)
+            return pd.Panel({idx: df.shift(-idx) for idx in idxNum})
 
     class Plot(object):
 
