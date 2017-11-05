@@ -22,6 +22,20 @@ pd.set_option('display.max_columns', 15)
 
 class RxModeling(object):
 
+    class Basic(object):
+
+        @staticmethod
+        def getBound(breakPoints=(), lowBound=-np.inf, highBound=np.inf):
+            bps = [lowBound] + list(breakPoints) + [highBound]
+            return [(bps[i], bps[i+1]) for i in range(len(breakPoints)+1)]
+
+        @staticmethod
+        def getValid(*arrays):
+            valid = ~np.isnan(arrays[0])
+            for a in arrays[1:]:
+                valid = valid & (~np.isnan(a))
+            return (a[valid] for a in arrays)
+
     class LogRelated(object):
 
         class Log(object):
@@ -114,7 +128,7 @@ class RxModeling(object):
 
                     return keys_dict_list
 
-    class fitRelated(object):
+    class FittingRelated(object):
 
         class VariableSelection(object):
             """
@@ -366,6 +380,50 @@ class RxModeling(object):
                 res[valid] = yValid - polyFunc(xValid)
                 resDf.loc[idx] = res
             return {'residual': resDf, 'coefDict': coefDict}
+
+        class PiecewiseReg(object):
+
+            def __init__(self, breakPoints=(), addConstant=True):
+                self.breakPoints = breakPoints
+                self.addConstant = addConstant
+                self.breakBound = RxModeling.Basic.getBound(breakPoints)
+                self.models = None
+
+            def fit(self, xTrain, yTrain):
+                xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
+                data = pd.DataFrame({'x': xTrain, 'y': yTrain})
+                datas = [data[(data['x'] > low) & (data['x'] < upper)] for low, upper in self.breakBound]
+                self.models = [sm.OLS(d['y'].values,
+                                      d['x'].values if not self.addConstant else sm.add_constant(d['x'].values)).fit()
+                               for d in datas]
+
+            def predict(self, xTest):
+                xTest = np.array(xTest)
+                yHat = np.full(xTest.shape, np.nan)
+                for i, (low, upper) in enumerate(self.breakBound):
+                    con = (xTest > low) & (xTest <= upper)
+                    xCon = xTest[con]
+                    if len(xCon) == 0:
+                        continue
+                    if self.addConstant:
+                        xCon = sm.add_constant(xCon) if len(xCon) != 1 else np.array([1, xCon])
+                    yHat[con] = self.models[i].predict(xCon if not self.addConstant else sm.add_constant(xCon))
+                return yHat
+
+            @staticmethod
+            def _testFunc():
+                n = 1000
+                x = np.random.rand(n) - 0.5
+                epsilon = np.random.randn(n) * 0.1
+                y = (x + 1) * (x > 0) + ((-1) * x + 1) * (x < 0) + epsilon
+                pr = RxModeling.FittingRelated.PiecewiseReg(breakPoints=(0,), addConstant=True)
+                pr.fit(x, y)
+                yHat = pr.predict(x)
+                plt.scatter(x, y)
+                ss = np.argsort(x)
+                plt.plot(x[ss], yHat[ss])
+                plt.show()
+                return {'pr': pr, 'yHat': yHat, 'x': x, 'y': y}
 
     class X(object):
 
