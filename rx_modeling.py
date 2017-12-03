@@ -13,6 +13,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LassoLars
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 import seaborn
 
 matplotlib.use("Qt4Agg")
@@ -42,11 +44,11 @@ class RxModeling(object):
 
             def __init__(self, file_name='log/%T', is_to_console=True):
                 self.log_obj = None
-                self.file_name = self.reformat_file_name(file_name)
+                self.file_name = self._reformat_file_name(file_name)
                 self.is_to_console = is_to_console
 
             @staticmethod
-            def reformat_file_name(file_name):
+            def _reformat_file_name(file_name):
                 time_str = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
                 if '%T' in file_name:
                     file_name = file_name.replace('%T', time_str)
@@ -128,7 +130,124 @@ class RxModeling(object):
 
                     return keys_dict_list
 
-    class FittingRelated(object):
+    class Fitting(object):
+
+        class Models(object):
+
+            class DecisionTree(DecisionTreeRegressor):
+
+                def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
+                    if X.ndim == 1:
+                        X = X.reshape((-1, 1))
+                    valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
+                    X, y = X[valid, :], y[valid]
+                    super(RxModeling.Fitting.DecisionTree, self).fit(X, y, sample_weight, check_input, X_idx_sorted)
+
+                def predict(self, X, check_input=True):
+                    if X.ndim == 1:
+                        X = X.reshape((-1, 1))
+                    y = np.full(X.shape[0], np.nan)
+                    valid = np.all(~np.isnan(X), axis=1)
+                    X = X[valid, :]
+                    yValid = super(RxModeling.Fitting.DecisionTree, self).predict(X, check_input)
+                    y[valid] = yValid
+                    return y
+
+            class RandomForest(RandomForestRegressor):
+
+                def fit(self, X, y, sample_weight=None):
+                    if X.ndim == 1:
+                        X = X.reshape((-1, 1))
+                    valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
+                    X, y = X[valid, :], y[valid]
+                    super(RxModeling.Fitting.RandomForest, self).fit(X, y, sample_weight=sample_weight)
+
+                def predict(self, X):
+                    if X.ndim == 1:
+                        X = X.reshape((-1, 1))
+                    y = np.full(X.shape[0], np.nan)
+                    valid = np.all(~np.isnan(X), axis=1)
+                    X = X[valid, :]
+                    yValid = super(RxModeling.Fitting.RandomForest, self).predict(X)
+                    y[valid] = yValid
+                    return y
+
+            class PiecewiseRegContinous(object):
+
+                def __init__(self, breakPoints=(), setBreakPointsInFit=False, setQuantileNum=5):
+                    self.breakPoints = breakPoints
+                    self.breakBound = RxModeling.Basic.getBound(breakPoints)
+
+                    self.setBreakPointsInFit = setBreakPointsInFit
+                    self.setQuantileNum = setQuantileNum
+                    self.model = None
+
+                def setBreakByQuantile(self, xTrain, fracNum=5):
+                    xTrain = RxModeling.Basic.getValid(xTrain)
+                    self.breakPoints = [np.percentile(xTrain, int(i * 100. / fracNum)) for i in range(1, fracNum)]
+                    self.breakBound = RxModeling.Basic.getBound(self.breakPoints)
+
+                def fit(self, xTrain, yTrain):
+                    xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
+                    if self.setBreakPointsInFit:
+                        self.setBreakByQuantile(xTrain, self.setQuantileNum)
+                    dataDf = pd.DataFrame({'x': xTrain, 'y': yTrain})
+                    for i, bp in enumerate(self.breakPoints):
+                        dataDf['x_' + str(i)] = np.where(xTrain > bp, xTrain - bp, 0)
+                    formula = 'y ~ ' + '+'.join(['x'] + ['x_' + str(i) for i in range(len(self.breakPoints))])
+                    model = smf.ols(formula=formula, data=dataDf).fit()
+                    self.model = model
+                    return self
+
+                def predict(self, xTest):
+                    xTest = np.array(xTest)
+                    yHat = np.full(xTest.shape, np.nan)
+                    valid = ~np.isnan(xTest)
+                    xTest = xTest[valid]
+                    dataDf = pd.DataFrame({'x': xTest})
+                    for i, bp in enumerate(self.breakPoints):
+                        dataDf['x_' + str(i)] = np.where(xTest > bp, xTest - bp, 0)
+                    yHat[valid] = self.model.predict(dataDf)
+                    return yHat
+
+            class PiecewiseReg(object):
+
+                def __init__(self, breakPoints=(), addConstant=True, setBreakPointsInFit=False, setQuantileNum=5):
+                    self.breakPoints = breakPoints
+                    self.breakBound = RxModeling.Basic.getBound(breakPoints)
+                    self.addConstant = addConstant
+
+                    self.setBreakPointsInFit = setBreakPointsInFit
+                    self.setQuantileNum = setQuantileNum
+
+                    self.models = None
+
+                def setBreakByQuantile(self, xTrain, fracNum=5):
+                    xTrain = RxModeling.Basic.getValid(xTrain)
+                    self.breakPoints = [np.percentile(xTrain, int(i * 100. / fracNum)) for i in range(1, fracNum)]
+                    self.breakBound = RxModeling.Basic.getBound(self.breakPoints)
+
+                def fit(self, xTrain, yTrain):
+                    xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
+                    data = pd.DataFrame({'x': xTrain, 'y': yTrain})
+                    datas = [data[(data['x'] > low) & (data['x'] < upper)] for low, upper in self.breakBound]
+                    self.models = [sm.OLS(d['y'].values, d['x'].values if not self.addConstant else sm.add_constant(
+                        d['x'].values)).fit()
+                                   for d in datas]
+                    return self
+
+                def predict(self, xTest):
+                    xTest = np.array(xTest)
+                    yHat = np.full(xTest.shape, np.nan)
+                    for i, (low, upper) in enumerate(self.breakBound):
+                        con = (xTest > low) & (xTest <= upper)
+                        xCon = xTest[con]
+                        if len(xCon) == 0:
+                            continue
+                        if self.addConstant:
+                            xCon = sm.add_constant(xCon) if len(xCon) != 1 else np.array([1, xCon])
+                        yHat[con] = self.models[i].predict(xCon if not self.addConstant else sm.add_constant(xCon))
+                    return yHat
 
         class VariableSelection(object):
             """
@@ -416,7 +535,7 @@ class RxModeling(object):
                 x = np.random.rand(n) - 0.5
                 epsilon = np.random.randn(n) * 0.1
                 y = (x + 1) * (x > 0) + ((-1) * x + 1) * (x < 0) + epsilon
-                pr = RxModeling.FittingRelated.PiecewiseReg(breakPoints=(0,), addConstant=True)
+                pr = RxModeling.Fitting.PiecewiseReg(breakPoints=(0,), addConstant=True)
                 pr.fit(x, y)
                 yHat = pr.predict(x)
                 plt.scatter(x, y)
@@ -429,16 +548,21 @@ class RxModeling(object):
 
         @staticmethod
         def calc_basic_statistics(x, info=None):
-            info = ['mean', 'std', 'skew', 'kurt', 'num', 'num_out2std', 'num_out3std', 'num_out5std', 'num_out10std'] \
+            info = ['mean', 'std', 'skew', 'kurt', 'num', 'nanNum', 'max', 'min', 'num_out2std', 'num_out3std', 'num_out5std', 'num_out10std'] \
                 if info is None else info
 
             x = np.array(x).ravel()
+            nanNum = np.sum(np.isnan(x))
+            x = x[~np.isnan(x)]
 
             func_map = {'mean': np.mean,
                         'std': np.std,
                         'skew': stats.skew,
                         'kurt': stats.kurtosis,
                         'num': len,
+                        'nanNum':lambda x: nanNum,
+                        'max': np.max,
+                        'min': np.min,
                         'num_out2std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 2 * np.std(x_func)) +
                                                       np.sum((x_func - np.mean(x_func)) < -2 * np.std(x_func)),
                         'num_out3std': lambda x_func: np.sum((x_func - np.mean(x_func)) > 3 * np.std(x_func)) +
@@ -629,6 +753,16 @@ class RxModeling(object):
             return is_h0_true, p_value, t_value, cv
 
     class NpTools(object):
+
+        @staticmethod
+        def rankNan(x):
+            y = np.argsort(np.where(np.isnan(x), np.inf, x), axis=0)
+            y2 = np.full(x.shape, np.nan, )
+            rankArray = np.arange(1, y.shape[0]+1)
+            for i, j in enumerate(y.T):
+                y2[:, i][j] = rankArray
+            y2[np.isnan(x)] = np.nan
+            return y2
 
         @staticmethod
         def getValid(xTuple, validFunc=lambda x: ~np.isnan(x)):
