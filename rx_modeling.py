@@ -24,12 +24,14 @@ pd.set_option('display.max_columns', 15)
 
 class RxModeling(object):
 
-    class Basic(object):
+    class SysRelated(object):
 
         @staticmethod
-        def getBound(breakPoints=(), lowBound=-np.inf, highBound=np.inf):
-            bps = [lowBound] + list(breakPoints) + [highBound]
-            return [(bps[i], bps[i+1]) for i in range(len(breakPoints)+1)]
+        def batchRename(tarFolder, files, tarFiles):
+            for i, j in zip(files, tarFiles):
+                os.system('mv %s %s' % (os.path.join(tarFolder, i), os.path.join(tarFolder, j)))
+
+    class Basic(object):
 
         @staticmethod
         def getValid(*arrays):
@@ -176,7 +178,7 @@ class RxModeling(object):
 
                 def __init__(self, breakPoints=(), setBreakPointsInFit=False, setQuantileNum=5):
                     self.breakPoints = breakPoints
-                    self.breakBound = RxModeling.Basic.getBound(breakPoints)
+                    self.breakBound = RxModeling.NpTools.getBound(breakPoints)
 
                     self.setBreakPointsInFit = setBreakPointsInFit
                     self.setQuantileNum = setQuantileNum
@@ -185,7 +187,7 @@ class RxModeling(object):
                 def setBreakByQuantile(self, xTrain, fracNum=5):
                     xTrain = RxModeling.Basic.getValid(xTrain)
                     self.breakPoints = [np.percentile(xTrain, int(i * 100. / fracNum)) for i in range(1, fracNum)]
-                    self.breakBound = RxModeling.Basic.getBound(self.breakPoints)
+                    self.breakBound = RxModeling.NpTools.getBound(self.breakPoints)
 
                 def fit(self, xTrain, yTrain):
                     xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
@@ -214,7 +216,7 @@ class RxModeling(object):
 
                 def __init__(self, breakPoints=(), addConstant=True, setBreakPointsInFit=False, setQuantileNum=5):
                     self.breakPoints = breakPoints
-                    self.breakBound = RxModeling.Basic.getBound(breakPoints)
+                    self.breakBound = RxModeling.NpTools.getBound(breakPoints)
                     self.addConstant = addConstant
 
                     self.setBreakPointsInFit = setBreakPointsInFit
@@ -225,7 +227,7 @@ class RxModeling(object):
                 def setBreakByQuantile(self, xTrain, fracNum=5):
                     xTrain = RxModeling.Basic.getValid(xTrain)
                     self.breakPoints = [np.percentile(xTrain, int(i * 100. / fracNum)) for i in range(1, fracNum)]
-                    self.breakBound = RxModeling.Basic.getBound(self.breakPoints)
+                    self.breakBound = RxModeling.NpTools.getBound(self.breakPoints)
 
                 def fit(self, xTrain, yTrain):
                     xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
@@ -500,50 +502,6 @@ class RxModeling(object):
                 resDf.loc[idx] = res
             return {'residual': resDf, 'coefDict': coefDict}
 
-        class PiecewiseReg(object):
-
-            def __init__(self, breakPoints=(), addConstant=True):
-                self.breakPoints = breakPoints
-                self.addConstant = addConstant
-                self.breakBound = RxModeling.Basic.getBound(breakPoints)
-                self.models = None
-
-            def fit(self, xTrain, yTrain):
-                xTrain, yTrain = RxModeling.Basic.getValid(xTrain, yTrain)
-                data = pd.DataFrame({'x': xTrain, 'y': yTrain})
-                datas = [data[(data['x'] > low) & (data['x'] < upper)] for low, upper in self.breakBound]
-                self.models = [sm.OLS(d['y'].values,
-                                      d['x'].values if not self.addConstant else sm.add_constant(d['x'].values)).fit()
-                               for d in datas]
-
-            def predict(self, xTest):
-                xTest = np.array(xTest)
-                yHat = np.full(xTest.shape, np.nan)
-                for i, (low, upper) in enumerate(self.breakBound):
-                    con = (xTest > low) & (xTest <= upper)
-                    xCon = xTest[con]
-                    if len(xCon) == 0:
-                        continue
-                    if self.addConstant:
-                        xCon = sm.add_constant(xCon) if len(xCon) != 1 else np.array([1, xCon])
-                    yHat[con] = self.models[i].predict(xCon if not self.addConstant else sm.add_constant(xCon))
-                return yHat
-
-            @staticmethod
-            def _testFunc():
-                n = 1000
-                x = np.random.rand(n) - 0.5
-                epsilon = np.random.randn(n) * 0.1
-                y = (x + 1) * (x > 0) + ((-1) * x + 1) * (x < 0) + epsilon
-                pr = RxModeling.Fitting.PiecewiseReg(breakPoints=(0,), addConstant=True)
-                pr.fit(x, y)
-                yHat = pr.predict(x)
-                plt.scatter(x, y)
-                ss = np.argsort(x)
-                plt.plot(x[ss], yHat[ss])
-                plt.show()
-                return {'pr': pr, 'yHat': yHat, 'x': x, 'y': y}
-
     class X(object):
 
         @staticmethod
@@ -753,6 +711,11 @@ class RxModeling(object):
             return is_h0_true, p_value, t_value, cv
 
     class NpTools(object):
+
+        @staticmethod
+        def getBound(breakPoints=(), lowBound=-np.inf, highBound=np.inf):
+            bps = [lowBound] + list(breakPoints) + [highBound]
+            return [(bps[i], bps[i+1]) for i in range(len(breakPoints)+1)]
 
         @staticmethod
         def rankNan(x):
