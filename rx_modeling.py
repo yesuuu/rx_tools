@@ -13,6 +13,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LassoLars
+from sklearn.linear_model import LinearRegression
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 import seaborn
@@ -426,13 +427,32 @@ class RxModeling(object):
             plt.show()
             return {'fitObj': fitObj, 'yHat': yHat, 'x': x, 'y': y}
 
+        class LinearRegression(LinearRegression):
+
+            def fit(self, X, y, sample_weight=None):
+                if X.ndim == 1:
+                    X = X.reshape((-1, 1))
+                valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
+                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
+                super(RxModeling.Fitting.LinearRegression, self).fit(X, y, sample_weight)
+
+            def predict(self, X):
+                if X.ndim == 1:
+                    X = X.reshape((-1, 1))
+                y = np.full(X.shape[0], np.nan)
+                valid = np.all(~np.isnan(X), axis=1)
+                X = X[valid, :]
+                yValid = super(RxModeling.Fitting.LinearRegression, self).predict(X)
+                y[valid] = yValid
+                return y
+
         class DecisionTree(DecisionTreeRegressor):
 
             def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
                 if X.ndim == 1:
                     X = X.reshape((-1, 1))
                 valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
-                X, y = X[valid, :], y[valid]
+                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
                 super(RxModeling.Fitting.DecisionTree, self).fit(X, y, sample_weight, check_input, X_idx_sorted)
 
             def predict(self, X, check_input=True):
@@ -451,7 +471,7 @@ class RxModeling(object):
                 if X.ndim == 1:
                     X = X.reshape((-1, 1))
                 valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
-                X, y = X[valid, :], y[valid]
+                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
                 super(RxModeling.Fitting.RandomForest, self).fit(X, y, sample_weight=sample_weight)
 
             def predict(self, X):
@@ -558,6 +578,32 @@ class RxModeling(object):
                         xCon = sm.add_constant(xCon) if len(xCon) != 1 else np.array([1, xCon])
                     yHat[con] = self.models[i].predict(xCon if not self.addConstant else sm.add_constant(xCon))
                 return yHat
+
+        class marginRegression(object):
+
+            def __init__(self, fit_intercept=True):
+                self.fit_intercept = fit_intercept
+
+            def fit(self, xTrain, yTrain, sample_weight=None):
+                if xTrain.ndim == 1:
+                    xTrain = xTrain.reshape((-1, 1))
+                valid = np.all(~np.isnan(xTrain), axis=1) & (~np.isnan(yTrain))
+                xTrain, yTrain, sample_weight = xTrain[valid, :], yTrain[valid], sample_weight[valid]
+                coef = np.full(xTrain.shape[1], np.nan)
+                intercept = 0.
+
+                for i in range(xTrain.shape[1]):
+                    xTmp = xTrain[:, i]
+                    lr = RxModeling.Fitting.LinearRegression(fit_intercept=self.fit_intercept)
+                    lr.fit(xTmp, yTrain, sample_weight)
+                    if self.fit_intercept:
+                        intercept += lr.coef_[0]
+                        coef[i] = lr.coef_[1]
+                    else:
+                        pass
+
+            def predict(self, xTest):
+                pass
 
         @staticmethod
         def normalizeByVectors(rawDf, vectorDfs, addConstant=True, minObs=100):
