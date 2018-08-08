@@ -2,12 +2,14 @@ import sys
 import os
 import time
 import datetime
+import datetime as dt
 import re
-import random
+# import random
 import subprocess
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+import statsmodels.formula.api as smf
 import scipy.stats as stats
 import matplotlib
 import matplotlib.pyplot as plt
@@ -24,7 +26,6 @@ pd.set_option('display.max_columns', 15)
 
 
 class RxModeling(object):
-
     class SysRelated(object):
 
         @staticmethod
@@ -408,6 +409,16 @@ class RxModeling(object):
                             break
                 return x_columns
 
+    class VariableCluster(object):
+
+        @staticmethod
+        def basic(X):
+            from scipy.cluster.hierarchy import dendrogram, linkage
+            Z = linkage(X, "single", "correlation")
+            dendrogram(Z, labels=X.index, color_threshold=0)
+            plt.show()
+            return Z
+
     class Fitting(object):
 
         @staticmethod
@@ -427,32 +438,13 @@ class RxModeling(object):
             plt.show()
             return {'fitObj': fitObj, 'yHat': yHat, 'x': x, 'y': y}
 
-        class LinearRegression(LinearRegression):
-
-            def fit(self, X, y, sample_weight=None):
-                if X.ndim == 1:
-                    X = X.reshape((-1, 1))
-                valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
-                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
-                super(RxModeling.Fitting.LinearRegression, self).fit(X, y, sample_weight)
-
-            def predict(self, X):
-                if X.ndim == 1:
-                    X = X.reshape((-1, 1))
-                y = np.full(X.shape[0], np.nan)
-                valid = np.all(~np.isnan(X), axis=1)
-                X = X[valid, :]
-                yValid = super(RxModeling.Fitting.LinearRegression, self).predict(X)
-                y[valid] = yValid
-                return y
-
         class DecisionTree(DecisionTreeRegressor):
 
             def fit(self, X, y, sample_weight=None, check_input=True, X_idx_sorted=None):
                 if X.ndim == 1:
                     X = X.reshape((-1, 1))
                 valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
-                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
+                X, y = X[valid, :], y[valid]
                 super(RxModeling.Fitting.DecisionTree, self).fit(X, y, sample_weight, check_input, X_idx_sorted)
 
             def predict(self, X, check_input=True):
@@ -471,7 +463,7 @@ class RxModeling(object):
                 if X.ndim == 1:
                     X = X.reshape((-1, 1))
                 valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
-                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
+                X, y = X[valid, :], y[valid]
                 super(RxModeling.Fitting.RandomForest, self).fit(X, y, sample_weight=sample_weight)
 
             def predict(self, X):
@@ -579,31 +571,116 @@ class RxModeling(object):
                     yHat[con] = self.models[i].predict(xCon if not self.addConstant else sm.add_constant(xCon))
                 return yHat
 
+        class LinearRegression(LinearRegression):
+
+            def fit(self, X, y, sample_weight=None):
+                if X.ndim == 1:
+                    X = X.reshape((-1, 1))
+                sample_weight = np.ones(y.shape) if sample_weight is None else sample_weight
+                valid = np.all(~np.isnan(X), axis=1) & (~np.isnan(y))
+                X, y, sample_weight = X[valid, :], y[valid], sample_weight[valid]
+                super(RxModeling.Fitting.LinearRegression, self).fit(X, y, sample_weight)
+
+            def predict(self, X):
+                if X.ndim == 1:
+                    X = X.reshape((-1, 1))
+                y = np.full(X.shape[0], np.nan)
+                valid = np.all(~np.isnan(X), axis=1)
+                X = X[valid, :]
+                yValid = super(RxModeling.Fitting.LinearRegression, self).predict(X)
+                y[valid] = yValid
+                return y
+
         class marginRegression(object):
 
             def __init__(self, fit_intercept=True):
                 self.fit_intercept = fit_intercept
+                self.intercept_ = None
+                self.coef_ = None
 
             def fit(self, xTrain, yTrain, sample_weight=None):
                 if xTrain.ndim == 1:
                     xTrain = xTrain.reshape((-1, 1))
+                sample_weight = np.ones(yTrain.shape) if sample_weight is None else sample_weight
                 valid = np.all(~np.isnan(xTrain), axis=1) & (~np.isnan(yTrain))
                 xTrain, yTrain, sample_weight = xTrain[valid, :], yTrain[valid], sample_weight[valid]
                 coef = np.full(xTrain.shape[1], np.nan)
                 intercept = 0.
 
+                yBench = yTrain
                 for i in range(xTrain.shape[1]):
                     xTmp = xTrain[:, i]
                     lr = RxModeling.Fitting.LinearRegression(fit_intercept=self.fit_intercept)
-                    lr.fit(xTmp, yTrain, sample_weight)
+                    lr.fit(xTmp, yBench, sample_weight)
+
                     if self.fit_intercept:
-                        intercept += lr.coef_[0]
-                        coef[i] = lr.coef_[1]
+                        intercept += lr.intercept_
+                        coef[i] = lr.coef_
                     else:
-                        pass
+                        coef[i] = lr.coef_
+
+                    yBench = yBench - lr.predict(xTmp)
+
+                self.intercept_ = intercept
+                self.coef_ = coef
 
             def predict(self, xTest):
-                pass
+                if xTest.ndim == 1:
+                    xTest = xTest.reshape((-1, 1))
+                return np.dot(xTest, self.coef_) + self.intercept_
+
+        class marginRegression2(object):
+
+            def __init__(self, fit_intercept=True):
+                self.fit_intercept = fit_intercept
+                self.intercept_ = None
+                self.coef_ = None
+
+            def fit(self, xTrain, yTrain, sample_weight=None):
+                if xTrain.ndim == 1:
+                    xTrain = xTrain.reshape((-1, 1))
+                sample_weight = np.ones(yTrain.shape) if sample_weight is None else sample_weight
+                valid = np.all(~np.isnan(xTrain), axis=1) & (~np.isnan(yTrain))
+                xTrain, yTrain, sample_weight = xTrain[valid, :], yTrain[valid], sample_weight[valid]
+
+                coef = np.full(xTrain.shape[1], np.nan)
+                intercept = 0.
+
+                yBench = yTrain
+                for i in range(xTrain.shape[1]):
+                    xTmp = xTrain[:, i]
+                    if i == 0:
+                        xResidual = xTmp
+                        xIntercept = 0.
+                        xCoef = np.array([])
+                    else:
+                        xLr = xTrain[:, :i]
+                        xModel = RxModeling.Fitting.LinearRegression(fit_intercept=True)
+                        xModel.fit(xLr, xTmp, sample_weight)
+                        xResidual = xTmp - xModel.predict(xLr)
+
+                        xIntercept = xModel.intercept_
+                        xCoef = xModel.coef_
+
+                    # xBench.append(xTmp)
+                    lr = RxModeling.Fitting.LinearRegression(fit_intercept=self.fit_intercept)
+                    lr.fit(xResidual, yBench, sample_weight)
+                    resIntercept, resCoef = (lr.intercept_, lr.coef_) if self.fit_intercept else (0., lr.coef_)
+
+                    intercept += (resIntercept - resCoef * xIntercept)
+                    coef[:i] += (- resCoef * xCoef)
+                    coef[i] = resCoef
+                    print coef
+
+                    yBench = yBench - lr.predict(xResidual)
+
+                self.intercept_ = intercept
+                self.coef_ = coef
+
+            def predict(self, xTest):
+                if xTest.ndim == 1:
+                    xTest = xTest.reshape((-1, 1))
+                return np.dot(xTest, self.coef_) + self.intercept_
 
         @staticmethod
         def normalizeByVectors(rawDf, vectorDfs, addConstant=True, minObs=100):

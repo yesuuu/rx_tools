@@ -26,6 +26,7 @@ class STWorkFlow():
 
                 'toSeasonal': RxFundamental.StatementFunc.toSeasonal,
                 'toYearly': RxFundamental.StatementFunc.toYearly,
+                'diff': lambda x: x - x.shift(4),
 
                 'toDaily': STWorkFlow.Utils.changeXWrapper.rpDataToDailyDataWrapper,
                 'toForecast': STWorkFlow.Utils.changeXWrapper.toForecastWrapper,
@@ -74,9 +75,7 @@ class STWorkFlow():
         @staticmethod
         def xAdd(xList, xNames, y, singleEvaluateFunc, updateYBenchFunc, valueThresFunc,
                  sortValuesFunc=None, extraFuncs=None):
-
             singleValue = [singleEvaluateFunc(x, y) for x in xList]
-
             if sortValuesFunc:
                 singleValue, xList, xNames = sortValuesFunc(singleValue, xList, xNames)
 
@@ -120,6 +119,63 @@ class STWorkFlow():
 
             return xNamesSelect, summaryDf
 
+        @staticmethod
+        def xRemove(xList, xNames, y, evaluateFunc, chooseFunc, valueThresFunc, extraFuncs=None):
+
+            xListIn = xList[:]
+            xNamesIn = xNames[:]
+
+            state = {
+                'xList': xListIn,
+                'xNames': xNamesIn,
+                'y': y,
+            }
+
+            isContinue = True
+            xNamesRemove = []
+            summaryDf = pd.DataFrame(columns=['xName', 'value'] + (
+                sorted(extraFuncs.keys()) if extraFuncs is not None else []))
+
+            while isContinue:
+                xValues = [evaluateFunc(xName, state) for xName in xNamesIn]
+                xName = chooseFunc(xNamesIn, xValues)
+                xValue = xValues[xNamesIn.index(xName)]
+
+                if valueThresFunc(xValue):
+                    xIdx = xNamesIn.index(xName)
+                    _, _ = xNamesIn.pop(xIdx), xListIn.pop(xIdx)
+                    xNamesRemove.append(xName)
+
+                    record = [xName, xValue]
+                    if extraFuncs:
+                        state['xNameRemoveTmp'] = xName
+                        recordAdd = [extraFuncs[key](state) for key in sorted(extraFuncs.keys())]
+                        record += recordAdd
+                    summaryDf.loc[len(summaryDf)] = record
+                else:
+                    isContinue = False
+            return xNamesRemove, summaryDf
+
+        @staticmethod
+        def spreadChange(xList, xNames, changeXs, changeNames, isPrint=False):
+            # def spreadChange(xList, xNames, changeXs, changeNames, infoDict=None, isPrint=False):
+            if isPrint:
+                print 'xLengthStart', len(xList), len(xNames)
+            newXList, newXNames = [], []
+            for xN, x in zip(xNames, xList):
+                for cX, cN in zip(changeXs, changeNames):
+                    newXList.append(STWorkFlow.Procedure.changeX(x, cX))
+                    newXNames.append(xN + cN)
+                    # if infoDict is not None:
+                    #     infoDict[xN + cN] = (xN, cX)
+            if isPrint:
+                print 'xLengthEnd', len(newXList), len(newXNames)
+            return newXList, newXNames
+
+        @staticmethod
+        def xSelect():
+            pass
+
     class Utils():
 
         class Basic():
@@ -146,113 +202,84 @@ class STWorkFlow():
                 if saveFig:
                     plt.savefig(saveFig)
 
-            @staticmethod
-            def spreadChange(xList, xNames, changeXs, changeNames):
-                newXList, newXNames = [], []
-                for xN, x in zip(xNames, xList):
-                    newXList.extend([STWorkFlow.Procedure.changeX(x, cX) for cX in changeXs])
-                    newXNames.extend([xN + cN for cN in changeNames])
-                return newXList, newXNames
-
         class SelectUtils():
 
             @staticmethod
-            def getIRWrapper(fe, portVarType=2, portDeMean=True):
-                def getIR(x, y):
-                    assert x.shape == y.shape
-                    port = RxFundamental.AlphaFunc.convertPortfolioFloat(fe, x, scale=100, varType=portVarType,
-                                                                         demean=portDeMean)
-                    pnl = port.mul(y).shift(1).sum(axis=1)
-                    ir = pnl.mean() / pnl.std() * np.sqrt(255)
-                    return ir
-
-                return getIR
+            def updateYBenchRegression(y, x, weight=None):
+                df = STWorkFlow.Utils.Basic.stack([y, x], ['y', 'x'], dropNa='any')
+                weightArr = weight.stack().loc[df.index].values if weight is not None else None
+                lr = linear_model.LinearRegression(fit_intercept=True)
+                lr.fit(df['x'].values.reshape(-1, 1), df['y'].values, sample_weight=weightArr)
+                yNew = pd.Series(df['y'].values - lr.predict(df['x'].values.reshape(-1, 1)),
+                                 index=df.index).unstack().loc[y.index, y.columns]
+                return yNew
 
             @staticmethod
-            def getUpdateYBenchRegression(weight=None):
-                def updateYBenchRegression(y, x):
-                    df = STWorkFlow.Utils.Basic.stack([y, x], ['y', 'x'], dropNa='any')
-                    weightArr = weight.stack().loc[df.index].values if weight is not None else None
-                    lr = linear_model.LinearRegression(fit_intercept=True)
-                    lr.fit(df['x'].values.reshape(-1, 1), df['y'].values, sample_weight=weightArr)
-                    yNew = pd.Series(df['y'].values - lr.predict(df['x'].values.reshape(-1, 1)),
-                                     index=df.index).unstack().loc[y.index, y.columns]
-                    return yNew
-
-                return updateYBenchRegression
+            def ave(xList):
+                return xList[0] if len(xList) == 1 else pd.Panel({str(i): x for i, x in enumerate(xList)}).mean(axis=0)
 
             @staticmethod
-            def xListAve():
-                def ave(xList, y):
-                    if len(xList) == 1:
-                        return xList[0]
-                    else:
-                        return pd.Panel({str(i): x for i, x in enumerate(xList)}).mean(axis=0)
-                return ave
+            def regCom(xList, y, weight=None):
+                df = STWorkFlow.Utils.Basic.stack(xList + [y],
+                                                  xNames=['x' + str(i + 1) for i in range(len(xList))] + ['y'],
+                                                  dropNa='any')
+                weightArr = weight.stack().loc[df.index].values if weight is not None else None
+                lr = linear_model.LinearRegression(fit_intercept=True)
+                lr.fit(df.drop('y', 1).values, df['y'].values, sample_weight=weightArr)
+                yHatArray = lr.predict(df.drop('y', 1).values)
+                return pd.Series(yHatArray, index=df.index).unstack().loc[y.index, y.columns]
 
             @staticmethod
-            def xListRegCom(weight=None):
-                def regCom(xList, y):
-                    df = STWorkFlow.Utils.Basic.stack(xList + [y],
-                                                      xNames=['x' + str(i + 1) for i in range(len(xList))] + ['y'],
-                                                      dropNa='any')
-                    weightArr = weight.stack().loc[df.index].values if weight is not None else None
-                    lr = linear_model.LinearRegression(fit_intercept=True)
-                    lr.fit(df.drop('y', 1).values, df['y'].values, sample_weight=weightArr)
-                    yHatArray = lr.predict(df.drop('y', 1).values)
-                    return pd.Series(yHatArray, index=df.index).unstack().loc[y.index, y.columns]
-
-                return regCom
+            def icMean(yHat, y):
+                return yHat.corrwith(y, axis=1).mean()
 
             @staticmethod
-            def yHatICMean():
-                def icMean(yHat, y):
-                    return yHat.corrwith(y, axis=1).mean()
-                return icMean
+            def icir(yHat, y):
+                ic = yHat.corrwith(y, axis=1)
+                return ic.mean() / ic.std() * np.sqrt(255)
 
             @staticmethod
-            def yHatICIR():
-                def icir(yHat, y):
-                    ic = yHat.corrwith(y, axis=1)
-                    return ic.mean() / ic.std() * np.sqrt(255)
-                return icir
+            def portIR(yHat, y, fe, portVarType=2, portDeMean=True):
+                port = RxFundamental.AlphaFunc.convertPortfolioFloat(fe, yHat, scale=100, varType=portVarType,
+                                                                     demean=portDeMean)
+                pnl = port.mul(y).shift(1).sum(axis=1)
+                return pnl.mean() / pnl.std() * np.sqrt(255)
 
             @staticmethod
-            def yHatPortIR(fe, portVarType=2, portDeMean=True):
-                def portIR(yHat, y):
-                    port = RxFundamental.AlphaFunc.convertPortfolioFloat(fe, x, scale=100, varType=portVarType,
-                                                                         demean=portDeMean)
-
-                    pnl = port.mul(y).shift(1).sum(axis=1)
-                    return pnl.mean() / pnl.std() * np.sqrt(255)
-                return portIR
-
-            @staticmethod
-            def getStatWrapper(yHatFunc, yHatArgs, statFunc, statArgs):
-                def getStat(xList, y):
-                    yHat = yHatFunc(**yHatArgs)(xList, y)
-                    stat = statFunc(**statArgs)(yHat, y)
-                    return stat
-
-                return getStat
+            def getMarginY(xName, xList, xNames, y, sampleWeight=None):
+                xNames, xList = xNames[:], xList[:]
+                idx = xNames.index(xName)
+                _, _ = xNames.pop(idx), xList.pop(idx)
+                yHat = STWorkFlow.Utils.SelectUtils.LR(xList, y, xList, weightIn=sampleWeight)
+                yResidual = y - yHat
+                return yResidual
 
             @staticmethod
             def LR(xListIn, yIn, xListOut, weightIn=None):
-                dfIn = STWorkFlow.Utils.Basic.stack(xListIn + [yIn],
-                                                  xNames=['x' + str(i + 1) for i in range(len(xListIn))] + ['y'],
-                                                  dropNa='any')
-
-                weightArr = weightIn.stack().loc[dfIn.index].values if weightIn is not None else None
-                lr = linear_model.LinearRegression(fit_intercept=True)
-                lr.fit(dfIn.drop('y', 1).values, dfIn['y'].values, sample_weight=weightArr)
-
+                lr = STWorkFlow.Utils.SelectUtils.LRModel(xListIn, yIn, weightIn)
+                if lr is None:
+                    return pd.DataFrame(index=xListOut[0].index,
+                                        columns=xListOut[0].columns)
                 dfOut = STWorkFlow.Utils.Basic.stack(xListOut,
-                                                  xNames=['x' + str(i + 1) for i in range(len(xListIn))],
-                                                  dropNa='any')
+                                                     xNames=['x' + str(i + 1) for i in range(len(xListIn))],
+                                                     dropNa='any')
 
                 yHatArray = lr.predict(dfOut.values)
                 return pd.Series(yHatArray, index=dfOut.index).unstack().loc[xListOut[0].index,
                                                                              xListOut[0].columns]
+
+            @staticmethod
+            def LRModel(xListIn, yIn, weightIn=None):
+                dfIn = STWorkFlow.Utils.Basic.stack(xListIn + [yIn],
+                                                    xNames=['x' + str(i + 1) for i in range(len(xListIn))] + ['y'],
+                                                    dropNa='any')
+                weightArr = weightIn.stack().loc[dfIn.index].values if weightIn is not None else None
+                lr = linear_model.LinearRegression(fit_intercept=True)
+                if not dfIn.empty:
+                    lr.fit(dfIn.drop('y', 1).values, dfIn['y'].values, sample_weight=weightArr)
+                    return lr
+                else:
+                    return None
 
         class XPlotWrapper():
 
