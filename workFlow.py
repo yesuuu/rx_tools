@@ -173,8 +173,23 @@ class STWorkFlow():
             return newXList, newXNames
 
         @staticmethod
-        def xSelect():
-            pass
+        def xAddV2(xList, xNames, y, chooseFunc, judgeFunc, infoFuncs=None, xSelected=None, ):
+            xNamesSelect = [] if xSelected is None else xSelected[:]
+            history = []
+            state = {
+                'xList': xList,
+                'xNames': xNames,
+                'y': y,
+                'xNamesSelect': xNamesSelect,
+                'history': history,
+            }
+            newOne = chooseFunc(state)
+            while newOne is not None:
+                history.append(newOne)
+                if judgeFunc(newOne, state):
+                    xNamesSelect.append(newOne)
+
+
 
     class Utils():
 
