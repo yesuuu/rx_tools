@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from sklearn import linear_model
 
+from ctaHead import ctaResearch
 from ruoxin_util import RxModeling, RxFundamental
 
 
@@ -158,7 +159,6 @@ class STWorkFlow():
 
         @staticmethod
         def spreadChange(xList, xNames, changeXs, changeNames, isPrint=False):
-            # def spreadChange(xList, xNames, changeXs, changeNames, infoDict=None, isPrint=False):
             if isPrint:
                 print 'xLengthStart', len(xList), len(xNames)
             newXList, newXNames = [], []
@@ -173,23 +173,53 @@ class STWorkFlow():
             return newXList, newXNames
 
         @staticmethod
-        def xAddV2(xList, xNames, y, chooseFunc, judgeFunc, infoFuncs=None, xSelected=None, ):
+        def xAddV2(xList, xNames, y, chooseFunc, judgeFunc, infoFuncs=None, xSelected=None,
+                   prepareFunc=None, selectUpdateFunc=None, unSelectUpdateFunc=None,
+                   isPrint=False):
             xNamesSelect = [] if xSelected is None else xSelected[:]
             history = []
+            isAdd = []
+            summary = {'isAdd': isAdd}
+            summary.update({} if infoFuncs is None else {k: [] for k in infoFuncs.keys()})
             state = {
                 'xList': xList,
                 'xNames': xNames,
                 'y': y,
                 'xNamesSelect': xNamesSelect,
                 'history': history,
+                'summary': summary,
+                'extraCache': {},
+                'isAdd': isAdd
             }
+            if prepareFunc is not None:
+                prepareFunc(state)
+
             newOne = chooseFunc(state)
             while newOne is not None:
+                if isPrint:
+                    print '%d of %d, evaluating %s' % (len(history) + 1, len(xNames), newOne)
+
                 history.append(newOne)
                 if judgeFunc(newOne, state):
                     xNamesSelect.append(newOne)
+                    isAdd.append(1.)
+                    if selectUpdateFunc is not None:
+                        selectUpdateFunc(state)
+                else:
+                    isAdd.append(False)
+                    if unSelectUpdateFunc is not None:
+                        unSelectUpdateFunc(state)
 
+                if infoFuncs:
+                    for funcName in infoFuncs.keys():
+                        val = infoFuncs[funcName](state)
+                        summary[funcName].append(val)
+                newOne = chooseFunc(state)
 
+            summaryDf = pd.DataFrame(summary)
+            summaryDf.index = history
+
+            return xNamesSelect, summaryDf
 
     class Utils():
 
@@ -198,6 +228,7 @@ class STWorkFlow():
             @staticmethod
             def stack(xList, xNames, dropNa=None):
                 df = pd.Panel({n: v for n, v in zip(xNames, xList)}).to_frame()
+                df = df.reindex(columns=xNames)
                 if dropNa:
                     df = df.dropna(how=dropNa)
                 return df
@@ -254,11 +285,54 @@ class STWorkFlow():
                 return ic.mean() / ic.std() * np.sqrt(255)
 
             @staticmethod
+            def portPnl(yHat, y, fe, portVarType=2, portDeMean=True):
+                port = RxFundamental.AlphaFunc.convertPortfolioFloat(fe, yHat, scale=100, varType=portVarType,
+                                                                     demean=portDeMean)
+                pnl = port.mul(y).shift(1).sum(axis=1)
+                return pnl.mean()
+
+            @staticmethod
             def portIR(yHat, y, fe, portVarType=2, portDeMean=True):
                 port = RxFundamental.AlphaFunc.convertPortfolioFloat(fe, yHat, scale=100, varType=portVarType,
                                                                      demean=portDeMean)
                 pnl = port.mul(y).shift(1).sum(axis=1)
                 return pnl.mean() / pnl.std() * np.sqrt(255)
+
+            @staticmethod
+            def officialPortPnl(yHat, y, fe, portVarType=1, shortMask=None):
+                assert isinstance(fe, ctaResearch.analysis.DailyForecastEvaluator)
+                port = fe.convertPortfolio(yHat, scale=100, varType=portVarType, shortMask=shortMask)
+                pnl = port.mul(y).sum(axis=1)
+                return pnl.mean()
+
+            @staticmethod
+            def officialPortIR(yHat, y, fe, portVarType=1, shortMask=None):
+                assert isinstance(fe, ctaResearch.analysis.DailyForecastEvaluator)
+                port = fe.convertPortfolio(yHat, scale=100, varType=portVarType, shortMask=shortMask)
+                pnl = port.mul(y).sum(axis=1)
+                return pnl.mean() / pnl.std() * np.sqrt(255)
+
+            @staticmethod
+            def officialTurnover(yHat, fe, portVarType=1, shortMask=None):
+                assert isinstance(fe, ctaResearch.analysis.DailyForecastEvaluator)
+                port = fe.convertPortfolio(yHat, scale=100, varType=portVarType, shortMask=shortMask)
+                turnover = fe.calcAvgTurnover(port)
+                return turnover
+
+            @staticmethod
+            def officialHoldingPeriod(yHat, fe, portVarType=1, shortMask=None):
+                assert isinstance(fe, ctaResearch.analysis.DailyForecastEvaluator)
+                port = fe.convertPortfolio(yHat, scale=100, varType=portVarType, shortMask=shortMask)
+                holdingPeriod = fe.calcHoldingPeriod(port)
+                return holdingPeriod
+
+            @staticmethod
+            def officialBPMargin(yHat, y, fe, portVarType=1, shortMask=None):
+                port = fe.convertPortfolio(yHat, scale=100, varType=portVarType, shortMask=shortMask)
+                pnl = port.mul(y).sum(axis=1)
+                turnover = fe.calcTurnover(port)
+                margin = fe.calcProfitMargin(pnl, turnover)
+                return margin
 
             @staticmethod
             def getMarginY(xName, xList, xNames, y, sampleWeight=None):
@@ -284,17 +358,75 @@ class STWorkFlow():
                                                                              xListOut[0].columns]
 
             @staticmethod
+            def LRPredict(xListOut, lrModel, ):
+                if lrModel is None:
+                    return pd.DataFrame(index=xListOut[0].index,
+                                        columns=xListOut[0].columns)
+                dfOut = STWorkFlow.Utils.Basic.stack(xListOut, xNames=['x' + str(i + 1) for i in range(len(xListOut))],
+                                                     dropNa='any')
+                yHatArray = lrModel.predict(dfOut.values)
+                return pd.Series(yHatArray, index=dfOut.index).unstack().loc[xListOut[0].index,
+                                                                             xListOut[0].columns]
+
+            @staticmethod
             def LRModel(xListIn, yIn, weightIn=None):
                 dfIn = STWorkFlow.Utils.Basic.stack(xListIn + [yIn],
                                                     xNames=['x' + str(i + 1) for i in range(len(xListIn))] + ['y'],
                                                     dropNa='any')
-                weightArr = weightIn.stack().loc[dfIn.index].values if weightIn is not None else None
+                weightArr = weightIn.stack().loc[dfIn.index].fillna(0.).values if weightIn is not None else None
                 lr = linear_model.LinearRegression(fit_intercept=True)
                 if not dfIn.empty:
                     lr.fit(dfIn.drop('y', 1).values, dfIn['y'].values, sample_weight=weightArr)
+                    # print lr.coef_
                     return lr
                 else:
                     return None
+
+            @staticmethod
+            def evalSortToChoose(evalFunc, sortFunc, isToSummary=True, isSaveValue=True):
+                cache = {}
+                def chooseFunc(state):
+                    if cache.get('sortedXNames') is None:
+                        values = [evalFunc(xN, state) for xN in state['xNames']]
+                        if isSaveValue:
+                            state['extraCache']['values'] = values
+                        sortedXNames = sortFunc(values, state['xNames'])
+                        cache['sortedXNames'] = sortedXNames
+
+                        if isToSummary:
+                            sortedValues = [values[state['xNames'].index(xN)] for xN in sortedXNames]
+                            state['summary']['singleValue'] = sortedValues
+
+                    if not state['history']:
+                        return cache['sortedXNames'][0]
+                    else:
+                        lastOne = state['history'][-1]
+                        lastOneIdx = cache['sortedXNames'].index(lastOne)
+                        if lastOneIdx < len(cache['sortedXNames']) - 1:
+                            return cache['sortedXNames'][lastOneIdx + 1]
+                        elif lastOneIdx == len(cache['sortedXNames']) - 1:
+                            return None
+                        else:
+                            raise Exception
+                return chooseFunc
+
+            @staticmethod
+            def evaljudgeToJudge(evalFunc, judgeValueFunc, isToSummary=True, ):
+                """
+                :param evalFunc: evalFunc(x, y) --> value
+                """
+                def judgeFunc(newOne, state):
+                    value = evalFunc(newOne, state)
+                    if isToSummary:
+                        if 'marginValue' not in state['summary']:
+                            state['summary']['marginValue'] = []
+                        state['summary']['marginValue'].append(value)
+
+                    if judgeValueFunc(value):
+                        return True
+                    else:
+                        return False
+                return judgeFunc
 
         class XPlotWrapper():
 

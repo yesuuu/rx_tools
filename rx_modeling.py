@@ -26,12 +26,24 @@ pd.set_option('display.max_columns', 15)
 
 
 class RxModeling(object):
+
     class SysRelated(object):
 
         @staticmethod
-        def batchRename(tarFolder, files, tarFiles):
+        def createFolder(folderPath):
+            if not os.path.isdir(folderPath):
+                os.makedirs(folderPath)
+            return folderPath
+
+        @staticmethod
+        def batchRename(tarFolderPath, files, tarFiles):
             for i, j in zip(files, tarFiles):
-                os.system('mv %s %s' % (os.path.join(tarFolder, i), os.path.join(tarFolder, j)))
+                os.system('mv %s %s' % (os.path.join(tarFolderPath, i), os.path.join(tarFolderPath, j)))
+
+        @staticmethod
+        def batchRemove(folderPath, files):
+            for f in files:
+                os.system('rm %s' % (os.path.join(folderPath, f), ))
 
         @staticmethod
         def batch_run(run_list, max_batch=1, wait_time=0, is_print=True, omp_num_threads=1):
@@ -65,24 +77,42 @@ class RxModeling(object):
                     runnings[run_now] = [f, now]
                     time.sleep(wait_time)
 
+        @staticmethod
+        def batchFunc(func, kwargsList, pNum, lowPriority=False):
+            pool = mp.Pool(pNum, maxtasksperchild=1)
+            if lowPriority:
+                parent = psutil.Process()
+                for child in parent.children():
+                    child.nice(1)
+            mpResults = [pool.apply_async(func, kwds=kwd) for kwd in kwargsList]
+            pool.close()
+            pool.join()
+
+            returnValues = [r.get() for r in mpResults]
+            return returnValues
+
     class Log(object):
 
-        def __init__(self, file_name='log/%T', is_to_console=True):
+        def __init__(self, file_name=None, is_to_memory=True, is_to_console=True):
             self.log_obj = None
             self.file_name = self.reformat_file_name(file_name)
+            self.is_to_memory = is_to_memory
             self.is_to_console = is_to_console
 
         @staticmethod
         def reformat_file_name(file_name):
-            time_str = dt.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            if '%T' in file_name:
-                file_name = file_name.replace('%T', time_str)
-            if '%D' in file_name:
-                file_name = file_name.replace('%D', time_str.split('T')[0])
+            if file_name is None:
+                return None
+            if isinstance(file_name, str):
+                time_str = dt.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+                if '%T' in file_name:
+                    file_name = file_name.replace('%T', time_str)
+                if '%D' in file_name:
+                    file_name = file_name.replace('%D', time_str.split('T')[0])
             return file_name
 
         def start(self, is_print=False):
-            self.log_obj = self.SavePrint(self.file_name, self.is_to_console)
+            self.log_obj = self.SavePrint(self.file_name, self.is_to_memory, self.is_to_console)
             self.log_obj.start()
             if is_print:
                 print '[log] log starts, to file %s' % (self.file_name,)
@@ -91,27 +121,37 @@ class RxModeling(object):
             self.log_obj.close()
 
         def save(self, target, is_print=False):
-            os.system('cp %s %s' % (self.file_name, target))
+            if self.is_to_memory:
+                self.log_obj.memoryToFile(target)
+            else:
+                os.system('cp %s %s' % (self.file_name, target))
             if is_print:
-                print '[log] log copy to %s' % (target,)
+                print '[log] log save to %s' % (target,)
 
         class SavePrint(object):
 
-            def __init__(self, files, is_to_console=True):
+            def __init__(self, files, is_to_memory=True, is_to_console=True):
 
+                self._memory = ''
+                self.is_to_memory = is_to_memory
+                self._console = sys.__stdout__
                 self.is_to_console = is_to_console
-                self.console = sys.__stdout__
 
+                if files is None:
+                    files = []
                 if isinstance(files, str):
                     files = [files]
 
-                self.file_objects = [open(file_, 'w') for file_ in files]
+                self.files = files
+                self._file_objects = [open(file_, 'w') for file_ in files]
 
             def write(self, message):
-                for file_object in self.file_objects:
+                for file_object in self._file_objects:
                     file_object.write(message)
+                if self.is_to_memory:
+                    self._memory += message
                 if self.is_to_console:
-                    self.console.write(message)
+                    self._console.write(message)
 
             def flush(self):
                 pass
@@ -120,9 +160,13 @@ class RxModeling(object):
                 sys.stdout = self
 
             def close(self):
-                for file_object in self.file_objects:
+                for file_object in self._file_objects:
                     file_object.close()
-                sys.stdout = self.console
+                sys.stdout = self._console
+
+            def memoryToFile(self, file_path):
+                with open(file_path, 'w') as f:
+                    f.write(self._memory)
 
     class LogAnalysis(object):
 
@@ -208,6 +252,16 @@ class RxModeling(object):
                 else:
                     dictRaw[k] = v
             return dictRaw
+
+        @staticmethod
+        def spreadChoice(*xLists):
+            choiceNum = len(xLists)
+            choices = [tuple()]
+            for i in range(choiceNum):
+                addXList = xLists[i]
+                choices = [choice+(x, ) for choice in choices for x in addXList]
+
+            return choices
 
     class VariableSelection(object):
         """
@@ -1040,6 +1094,16 @@ class RxModeling(object):
                 for funcName in funcs:
                     result.loc[funcName, :, group] = funcs[funcName](dataDfGroup)
             return result
+
+        @staticmethod
+        def toPickle(obj, saveFilePath, name='default'):
+            with pd.HDFStore(saveFilePath) as store:
+                store.put(name, obj)
+
+        @staticmethod
+        def readPickle(saveFilePath, name='default'):
+            with pd.HDFStore(saveFilePath) as store:
+                return store.get(name)
 
     class Time(object):
         def __init__(self, is_now=False, is_all=False, is_margin=False):
