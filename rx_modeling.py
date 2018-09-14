@@ -91,6 +91,7 @@ class RxModeling(object):
             returnValues = [r.get() for r in mpResults]
             return returnValues
 
+
     class Log(object):
 
         def __init__(self, file_name=None, is_to_memory=True, is_to_console=True):
@@ -956,6 +957,28 @@ class RxModeling(object):
             return {'changeNum': len(changePoints),
                     'changePoints': changePoints}
 
+        @staticmethod
+        def D3ToD2(x):
+            s1 = x.shape[0]
+            return x.reshape(s1, -1)
+
+        @staticmethod
+        def dropna(x, axis=0, how='any'):
+            if how == 'any':
+                func = np.any
+            elif how == 'all':
+                func = np.all
+            else:
+                raise Exception
+
+            if axis == 0:
+                xNew = x[~func(np.isnan(x), axis=1)]
+            elif axis == 1:
+                xNew = x[:, ~func(np.isnan(x), axis=0)]
+            else:
+                raise Exception
+            return xNew
+
     class PdTools(object):
 
         @staticmethod
@@ -1104,6 +1127,13 @@ class RxModeling(object):
         def readPickle(saveFilePath, name='default'):
             with pd.HDFStore(saveFilePath) as store:
                 return store.get(name)
+
+        @staticmethod
+        def toFrame(xPanel, dropna=None):
+            arr = RxModeling.NpTools.D3ToD2(xPanel.values).T
+            if dropna:
+                arr = RxModeling.NpTools.dropna(arr, axis=0, how=dropna)
+            return pd.DataFrame(arr, columns=xPanel.items)
 
     class Time(object):
         def __init__(self, is_now=False, is_all=False, is_margin=False):
